@@ -10,12 +10,18 @@ class Settings(BaseSettings):
     DEBUG: bool = False
 
     # Database Settings
-    DB_NAME: str = "user_management_db"
-    DB_USER: str = "root"
-    DB_PASSWORD: str = "root"
+    DB_NAME: str = "hrms_db"
+    DB_USER: str = ""
+    DB_PASSWORD: str = ""
     DB_HOST: str = "localhost"
     DB_PORT: int = 3306
-    DB_CHARSET: str = "utf8mb4"
+    DB_CHARSET: str = "utf8"
+
+    # Redis Configuration for Caching
+    REDIS_HOST: str = "localhost"
+    REDIS_PORT: int = 6379
+    REDIS_PASSWORD: str = ""
+    REDIS_DB: int = 0
 
     # CORS Settings
     CORS_ORIGINS: str = "https://localhost,http://localhost:3000"
@@ -26,6 +32,7 @@ class Settings(BaseSettings):
     # Asgardeo OAuth2 Settings
     ASGARDEO_ORG: str = ""  # REQUIRED: Must be set in .env file
     ASGARDEO_CLIENT_ID: str = ""  # REQUIRED: Must be set in .env file
+    ASGARDEO_CLIENT_SECRET: str = ""  # REQUIRED: Must be set in .env file
     JWT_AUDIENCE: str | None = None  # Optional: Set in .env if needed
     JWT_ISSUER: str | None = None  # Optional: Set in .env if needed
 
@@ -70,6 +77,106 @@ class Settings(BaseSettings):
     ROLES: List[str] = ["HR_Admin", "HR_Manager", "manager", "employee"]
     DEFAULT_ROLE: str = "employee"
 
+    @property
+    def VALID_ROLES(self) -> List[str]:
+        """Alias for ROLES for backward compatibility."""
+        return self.ROLES
+
+    # Role Hierarchy (higher number = more privileges)
+    ROLE_HIERARCHY: dict = {
+        "employee": 1,
+        "manager": 2,
+        "HR_Manager": 3,
+        "HR_Admin": 4,
+        "admin": 4,  # Alias for HR_Admin
+    }
+
+    # Permission Definitions by Role
+    ROLE_PERMISSIONS: dict = {
+        "employee": [
+            "profile:read",
+            "profile:update",
+            "leave:create",
+            "leave:read:own",
+            "attendance:read:own",
+            "attendance:checkin",
+            "attendance:checkout",
+        ],
+        "manager": [
+            "profile:read",
+            "profile:update",
+            "leave:create",
+            "leave:read:own",
+            "leave:read:team",
+            "leave:approve:team",
+            "leave:reject:team",
+            "attendance:read:own",
+            "attendance:read:team",
+            "attendance:checkin",
+            "attendance:checkout",
+            "employees:read:team",
+            "reports:read:team",
+        ],
+        "HR_Manager": [
+            "profile:read",
+            "profile:update",
+            "users:read",
+            "users:create",
+            "users:update",
+            "employees:read",
+            "employees:create",
+            "employees:update",
+            "leave:read",
+            "leave:approve",
+            "leave:reject",
+            "attendance:read",
+            "reports:read",
+            "departments:read",
+            "departments:create",
+            "departments:update",
+        ],
+        "HR_Admin": [
+            "profile:read",
+            "profile:update",
+            "users:read",
+            "users:create",
+            "users:update",
+            "users:delete",
+            "users:suspend",
+            "users:activate",
+            "roles:manage",
+            "employees:read",
+            "employees:create",
+            "employees:update",
+            "employees:delete",
+            "employees:manage",
+            "leave:read",
+            "leave:approve",
+            "leave:reject",
+            "leave:delete",
+            "attendance:read",
+            "attendance:update",
+            "attendance:delete",
+            "reports:read",
+            "reports:create",
+            "departments:read",
+            "departments:create",
+            "departments:update",
+            "departments:delete",
+            "settings:read",
+            "settings:update",
+            "audit:read",
+        ],
+    }
+
+    # Asgardeo Group Mapping
+    ASGARDEO_GROUP_MAPPING: dict = {
+        "HR_Admin": "HR-Administrators",
+        "HR_Manager": "HR-Managers",
+        "manager": "Team-Managers",
+        "employee": "Employees",
+    }
+
     # User Status Definitions
     USER_STATUSES: List[str] = ["active", "suspended", "deleted"]
     DEFAULT_STATUS: str = "active"
@@ -89,6 +196,13 @@ class Settings(BaseSettings):
     def database_url_without_db(self) -> str:
         """Generate MySQL URL without database name (for initial connection)."""
         return f"mysql+mysqldb://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}?charset={self.DB_CHARSET}"
+
+    @property
+    def redis_url(self) -> str:
+        """Generate Redis connection URL with authentication."""
+        if self.REDIS_PASSWORD:
+            return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     class Config:
         env_file = ".env.development"

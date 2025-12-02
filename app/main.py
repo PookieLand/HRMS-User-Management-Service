@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
 
+from aioredis import from_url
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,16 +13,24 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+async def get_redis_pool():
+    """Initialize and return a Redis connection pool."""
+    return await from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     # Startup
     logger.info("Starting User Management Service")
     logger.info(f"Environment: DEBUG={settings.DEBUG}")
     logger.info(f"Database: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
+    logger.info(f"Redis Cache: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
     logger.info(f"Employee Service: {settings.EMPLOYEE_SERVICE_URL}")
+    logger.info(f"Attendance Service: {settings.LEAVE_SERVICE_URL}")
+    logger.info(f"Leave Service: {settings.LEAVE_SERVICE_URL}")
+    logger.info(f"Notification Service: {settings.NOTIFICATION_SERVICE_URL}")
     logger.info(f"Audit Service: {settings.AUDIT_SERVICE_URL}")
     logger.info(f"Compliance Service: {settings.COMPLIANCE_SERVICE_URL}")
-    logger.info(f"Notification Service: {settings.NOTIFICATION_SERVICE_URL}")
 
     try:
         logger.info("Creating database and tables...")
@@ -30,6 +38,15 @@ async def lifespan(_: FastAPI):
         logger.info("Database initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
+        raise
+
+    try:
+        logger.info("Connecting to Redis cache...")
+        redis = await get_redis_pool()
+        await redis.ping()
+        logger.info("Connected to Redis successfully")
+    except Exception as e:
+        logger.error(f"Failed to connect to Redis: {e}")
         raise
 
     logger.info("Application startup complete")
@@ -70,5 +87,4 @@ async def root():
         "status": "healthy",
         "service": settings.APP_NAME,
         "version": settings.APP_VERSION,
-        "timestamp": datetime.now().isoformat(),
     }

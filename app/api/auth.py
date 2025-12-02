@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
-# from app.core.asgardeo import asgardeo_client
+from app.core.asgardeo import asgardeo_service
 from app.core.config import settings
 from app.core.database import get_session
 from app.core.integrations import (
@@ -213,7 +213,7 @@ async def signup(
 
     # Create user in Asgardeo
     try:
-        asgardeo_data = await asgardeo_client.create_user(
+        asgardeo_data = await asgardeo_service.create_user(
             email=request.email,
             password=request.password,
             first_name=request.first_name,
@@ -323,7 +323,7 @@ async def oauth_callback(
 
     # Exchange code for tokens
     try:
-        tokens = await asgardeo_client.exchange_code_for_token(
+        tokens = await asgardeo_service.exchange_code_for_token(
             code=request.code,
             state=request.state or "",
         )
@@ -501,7 +501,7 @@ async def update_profile(
 
     # Sync to Asgardeo
     try:
-        await asgardeo_client.update_user(
+        await asgardeo_service.update_user(
             asgardeo_id=user.asgardeo_id,
             first_name=update_data.first_name,
             last_name=update_data.last_name,
@@ -571,7 +571,7 @@ async def change_password(
 
     # Update password in Asgardeo
     try:
-        await asgardeo_client.update_user(
+        await asgardeo_service.update_user(
             asgardeo_id=user.asgardeo_id,
             updates={"password": request.new_password},
         )

@@ -1,8 +1,3 @@
-"""
-User Management API endpoints.
-Handles user CRUD operations, admin management, role updates, and user lifecycle management.
-"""
-
 from datetime import datetime
 from typing import Annotated, Optional
 
@@ -15,8 +10,7 @@ from app.api.dependencies import (
     get_current_user,
     require_role,
 )
-
-# from app.core.asgardeo import asgardeo_client
+from app.core.asgardeo import asgardeo_service
 from app.core.config import settings
 from app.core.integrations import (
     audit_client,
@@ -311,7 +305,7 @@ async def suspend_user(
         session.refresh(user)
 
         # Disable in Asgardeo
-        await asgardeo_client.disable_user(user.asgardeo_id)
+        await asgardeo_service.disable_user(user.asgardeo_id)
 
         logger.info(f"User {user_id} suspended")
 
@@ -404,7 +398,7 @@ async def activate_user(
         session.refresh(user)
 
         # Enable in Asgardeo
-        await asgardeo_client.enable_user(user.asgardeo_id)
+        await asgardeo_service.enable_user(user.asgardeo_id)
 
         logger.info(f"User {user_id} activated")
 
@@ -505,7 +499,7 @@ async def delete_user(
         session.refresh(user)
 
         # Disable in Asgardeo
-        await asgardeo_client.disable_user(user.asgardeo_id)
+        await asgardeo_service.disable_user(user.asgardeo_id)
 
         logger.info(f"User {user_id} deleted")
 
@@ -676,7 +670,7 @@ async def sync_users_from_asgardeo(
             if not user:
                 raise HTTPException(status_code=404, detail="User not found")
 
-            asgardeo_user = await asgardeo_client.get_user(user.asgardeo_id)
+            asgardeo_user = await asgardeo_service.get_user(user.asgardeo_id)
             if asgardeo_user:
                 # Update local record with Asgardeo data
                 user.first_name = asgardeo_user.get("name", {}).get("givenName")
@@ -688,7 +682,7 @@ async def sync_users_from_asgardeo(
 
         else:
             # Sync all users
-            asgardeo_users = await asgardeo_client.list_users()
+            asgardeo_users = await asgardeo_service.list_users()
             for asgardeo_user in asgardeo_users:
                 asgardeo_id = asgardeo_user.get("id")
                 email = asgardeo_user.get("emails", [{}])[0].get("value")

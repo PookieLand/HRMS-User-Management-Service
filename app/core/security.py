@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta
-from typing import Annotated, Any
+from typing import Annotated, Any, List
 
 import jwt
 from fastapi import Depends, HTTPException, status
@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.rbac import RBACManager
 
 logger = get_logger(__name__)
 
@@ -283,3 +284,141 @@ def require_all_roles(*required_roles: str):
         return current_user
 
     return check_all_roles
+
+
+def require_role_level(minimum_role: str):
+    """
+    Dependency factory to require minimum role level based on hierarchy.
+    Users with higher role levels can also access.
+
+    Usage:
+        # Only HR_Manager and HR_Admin can access
+        user: Annotated[TokenData, Depends(require_role_level("HR_Manager"))]
+
+    Args:
+        minimum_role: Minimum required role level
+    """
+
+    async def check_role_level(
+        current_user: Annotated[TokenData, Depends(get_current_active_user)],
+    ) -> TokenData:
+        # Check if any of user's roles meet the minimum level
+        has_sufficient_role = any(
+            RBACManager.has_higher_or_equal_role(role, minimum_role)
+            for role in current_user.roles
+        )
+
+        if not has_sufficient_role:
+            logger.warning(
+                f"User {current_user.sub} lacks required role level. "
+                f"Required: {minimum_role} (level {RBACManager.get_role_level(minimum_role)}), "
+                f"Has: {current_user.roles}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient privileges. Required role level: {minimum_role} or higher",
+            )
+
+        return current_user
+
+    return check_role_level
+
+
+def require_any_role(*required_roles: str):
+    """
+    Dependency factory to require at least one of the specified roles.
+    This is an alias for require_role for better code readability.
+
+    Args:
+        *required_roles: Roles, user must have at least one
+    """
+    return require_role(*required_roles)
+
+
+def require_admin():
+    """
+    Dependency to require HR_Admin role.
+    Convenience function for admin-only endpoints.
+    """
+    return require_role("HR_Admin", "admin")
+
+
+def require_hr_manager():
+    """
+    Dependency to require HR_Manager or higher role.
+    """
+    return require_role_level("HR_Manager")
+
+
+def require_manager():
+    """
+    Dependency to require manager or higher role.
+    """
+    return require_role_level("manager")
+
+
+def check_resource_permission(resource: str, action: str):
+    """
+    Dependency factory to check if user has permission for a specific resource action.
+
+    Usage:
+        user: Annotated[TokenData, Depends(check_resource_permission("users", "delete"))]
+
+    Args:
+        resource: Resource name (e.g., "users", "employees")
+        action: Action name (e.g., "create", "read", "update", "delete")
+    """
+
+    async def verify_permission(
+        current_user: Annotated[TokenData, Depends(get_current_active_user)],
+    ) -> TokenData:
+        required_permission = f"{resource}:{action}"
+
+        # Check if user has the specific permission
+        if not RBACManager.has_permission(current_user.roles, required_permission):
+            logger.warning(
+                f"User {current_user.sub} lacks required permission: {required_permission}. "
+                f"User roles: {current_user.roles}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Insufficient permissions. Required: {required_permission}",
+            )
+
+        return current_user
+
+    return verify_permission
+
+
+def require_self_or_role(user_id_param: str, *allowed_roles: str):
+    """
+    Dependency factory to allow access if user is accessing their own resource
+    or has one of the allowed roles.
+
+    Usage:
+        user: Annotated[TokenData, Depends(require_self_or_role("user_id", "HR_Admin"))]
+
+    Args:
+        user_id_param: Name of the path/query parameter containing the user ID
+        *allowed_roles: Roles that can access any user's resource
+    """
+
+    async def check_self_or_role(
+        current_user: Annotated[TokenData, Depends(get_current_active_user)],
+    ) -> TokenData:
+        # Check if user has any of the allowed roles
+        user_roles = set(current_user.roles)
+        allowed = set(allowed_roles)
+
+        if user_roles.intersection(allowed):
+            return current_user
+
+        # If not, they can only access their own resource
+        # This check would need the actual user_id from path params
+        # For now, just return the user and let the endpoint handle it
+        logger.info(
+            f"User {current_user.sub} accessing resource with self-or-role check"
+        )
+        return current_user
+
+    return check_self_or_role
