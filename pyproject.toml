@@ -1,0 +1,16 @@
+[project]
+name = "user-management-service"
+version = "0.1.0"
+description = "User Management Service - Microservice for managing users, authentication, and authorization"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[all]>=0.119.0",
+    "mysqlclient>=2.2.7",
+    "pydantic-settings>=2.0.0",
+    "sqlmodel>=0.0.27",
+    "python-jose[cryptography]>=3.3.0",
+    "pyjwt>=2.8.0",
+    "cryptography>=41.0.0",
+    "httpx>=0.25.0",
+]
