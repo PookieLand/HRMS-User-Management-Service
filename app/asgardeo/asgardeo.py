@@ -73,7 +73,7 @@ class AsgardeoClient:
             "delete": "internal_user_mgt_delete",
         },
         "groups": {
-            "list": "internal_group_mgt_list",
+            "list": "internal_group_mgt_view",  # Asgardeo uses 'view' for listing groups
             "create": "internal_group_mgt_create",
             "view": "internal_group_mgt_view",
             "update": "internal_group_mgt_update",

@@ -28,7 +28,12 @@ class EmployeeServiceClient:
         self.timeout = settings.SERVICE_REQUEST_TIMEOUT
 
     async def create_employee(
-        self, user_id: int, email: str, first_name: str, last_name: str
+        self,
+        user_id: int,
+        email: str,
+        first_name: str,
+        last_name: str,
+        phone: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Create employee record in Employee Service.
@@ -37,36 +42,69 @@ class EmployeeServiceClient:
             user_id: User ID from User Management Service
             email: Employee email
             first_name: Employee first name
-            last_name: Employee last name
+            last_name: Employee last_name
+            phone: Employee phone/contact number (optional)
 
         Returns:
             Employee data with employee_id, or None if failed
         """
-        url = f"{self.base_url}/api/v1/employees"
+        # Use internal endpoint for service-to-service calls (no auth required)
+        url = f"{self.base_url.rstrip('/')}/api/v1/employees/internal"
 
         payload = {
             "user_id": user_id,
             "email": email,
             "first_name": first_name,
             "last_name": last_name,
+            "contact_number": phone,
         }
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=self.timeout, follow_redirects=True
+            ) as client:
                 response = await client.post(url, json=payload)
 
                 if response.status_code in [200, 201]:
                     data = response.json()
-                    logger.info(f"Employee created: {data.get('employee_id')}")
+                    logger.info(
+                        f"✅ Employee created successfully: {data.get('id')} "
+                        f"for user {user_id}"
+                    )
                     return data
+                elif response.status_code == 401:
+                    logger.error(
+                        f"❌ 401 Unauthorized from Employee Service\n"
+                        f"The employee endpoint requires authentication.\n"
+                        f"Fix: Make employee creation endpoint allow internal service calls\n"
+                        f"     OR send a service token with the request"
+                    )
+                    return None
+                elif response.status_code == 307:
+                    logger.error(
+                        f"❌ 307 Redirect from Employee Service\n"
+                        f"URL: {url}\n"
+                        f"This usually means URL format issue (missing/extra slash)\n"
+                        f"Response: {response.text}"
+                    )
+                    return None
                 else:
                     logger.error(
-                        f"Failed to create employee: {response.status_code} - {response.text}"
+                        f"❌ Failed to create employee: HTTP {response.status_code}\n"
+                        f"URL: {url}\n"
+                        f"Response: {response.text[:500]}"
                     )
                     return None
 
         except httpx.RequestError as e:
-            logger.error(f"Error calling Employee Service: {e}")
+            logger.error(
+                f"❌ Network error calling Employee Service at {url}\n"
+                f"Error: {e}\n"
+                f"Check if employee-service is running: curl {self.base_url}/health"
+            )
+            return None
+        except Exception as e:
+            logger.error(f"❌ Unexpected error creating employee: {e}")
             return None
 
     async def update_employee_status(self, employee_id: int, status: str) -> bool:

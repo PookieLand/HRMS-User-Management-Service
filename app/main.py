@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 
-from aioredis import from_url
+import redis.asyncio as redis
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,7 +15,11 @@ logger = get_logger(__name__)
 
 async def get_redis_pool():
     """Initialize and return a Redis connection pool."""
-    return await from_url(settings.redis_url, encoding="utf-8", decode_responses=True)
+    return await redis.from_url(
+        settings.redis_url,
+        encoding="utf-8",
+        decode_responses=True
+    )
 
 
 @asynccontextmanager
