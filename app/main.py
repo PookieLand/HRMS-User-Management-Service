@@ -8,6 +8,7 @@ from app.api.auth import router as auth_router
 from app.api.users import router as users_router
 from app.core.config import settings
 from app.core.database import create_db_and_tables
+from app.core.kafka import KafkaProducer
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -16,9 +17,7 @@ logger = get_logger(__name__)
 async def get_redis_pool():
     """Initialize and return a Redis connection pool."""
     return await redis.from_url(
-        settings.redis_url,
-        encoding="utf-8",
-        decode_responses=True
+        settings.redis_url, encoding="utf-8", decode_responses=True
     )
 
 
@@ -53,12 +52,18 @@ async def lifespan(_: FastAPI):
         logger.error(f"Failed to connect to Redis: {e}")
         raise
 
+    logger.info("Initializing Kafka producer...")
+    await KafkaProducer.start()
+    logger.info("Kafka producer initialized successfully")
+
     logger.info("Application startup complete")
 
     yield
 
     # Shutdown
     logger.info("Shutting down User Management Service")
+    await KafkaProducer.stop()
+    logger.info("Kafka producer stopped")
 
 
 # Initialize FastAPI application

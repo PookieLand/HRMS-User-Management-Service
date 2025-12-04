@@ -8,11 +8,13 @@ from sqlmodel import Session, select
 from app.core.asgardeo import asgardeo_service
 from app.core.config import settings
 from app.core.database import get_session
+from app.core.events import EventEnvelope, EventType
 from app.core.integrations import (
     audit_client,
     employee_client,
     notification_client,
 )
+from app.core.kafka import publish_event
 from app.core.logging import get_logger
 from app.core.security import (
     TokenData,
@@ -205,6 +207,24 @@ async def signup(
         session.commit()
         session.refresh(db_user)
         logger.info(f"User created locally: {db_user.id}")
+
+        # Publish user created event
+        try:
+            event = EventEnvelope(
+                event_type=EventType.USER_CREATED,
+                data={
+                    "user_id": str(db_user.id),
+                    "email": db_user.email,
+                    "first_name": db_user.first_name,
+                    "last_name": db_user.last_name,
+                    "status": db_user.status,
+                    "role": db_user.role,
+                },
+            )
+            await publish_event("user-events", event)
+            logger.info(f"Published user created event for: {db_user.id}")
+        except Exception as e:
+            logger.warning(f"Failed to publish user created event: {e}")
     except Exception as e:
         logger.error(f"Failed to create user locally: {e}")
         # Try to clean up Asgardeo user
@@ -368,6 +388,20 @@ async def update_profile(
     session.add(user)
     session.commit()
     session.refresh(user)
+
+    # Publish user updated event
+    try:
+        event = EventEnvelope(
+            event_type=EventType.USER_UPDATED,
+            data={
+                "user_id": str(user.id),
+                "updated_fields": update_dict,
+            },
+        )
+        await publish_event("user-events", event)
+        logger.info(f"Published user updated event for: {user.id}")
+    except Exception as e:
+        logger.warning(f"Failed to publish user updated event: {e}")
 
     # Sync to Asgardeo via SCIM2
     try:

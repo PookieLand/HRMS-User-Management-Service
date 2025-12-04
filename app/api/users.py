@@ -12,12 +12,22 @@ from app.api.dependencies import (
 )
 from app.core.asgardeo import asgardeo_service
 from app.core.config import settings
+from app.core.events import (
+    EventEnvelope,
+    EventMetadata,
+    EventType,
+    UserActivatedEvent,
+    UserDeletedEvent,
+    UserRoleChangedEvent,
+    UserSuspendedEvent,
+)
 from app.core.integrations import (
     audit_client,
     compliance_client,
     employee_client,
     notification_client,
 )
+from app.core.kafka import publish_event
 from app.core.logging import get_logger
 from app.models.users import (
     MessageResponse,
@@ -219,6 +229,20 @@ async def update_user_role(
 
     logger.info(f"User {user_id} role updated from {old_role} to {role_update.role}")
 
+    # Publish Kafka event
+    event_data = UserRoleChangedEvent(
+        user_id=str(user.id),
+        username=user.email,
+        old_roles=[old_role],
+        new_roles=[role_update.role],
+    )
+    event = EventEnvelope(
+        event_type=EventType.USER_ROLE_CHANGED,
+        data=event_data.model_dump(),
+        metadata=EventMetadata(user_id=str(current_user.user_id)),
+    )
+    await publish_event("user-events", event)
+
     # Log audit event
     await audit_client.log_action(
         user_id=current_user.user_id,
@@ -308,6 +332,20 @@ async def suspend_user(
         await asgardeo_service.disable_user(user.asgardeo_id)
 
         logger.info(f"User {user_id} suspended")
+
+        # Publish Kafka event
+        event_data = UserSuspendedEvent(
+            user_id=str(user.id),
+            username=user.email,
+            email=user.email,
+            reason=suspend_data.reason,
+        )
+        event = EventEnvelope(
+            event_type=EventType.USER_SUSPENDED,
+            data=event_data.model_dump(),
+            metadata=EventMetadata(user_id=str(current_user.user_id)),
+        )
+        await publish_event("user-events", event)
 
         # Log audit event
         await audit_client.log_action(
@@ -401,6 +439,19 @@ async def activate_user(
         await asgardeo_service.enable_user(user.asgardeo_id)
 
         logger.info(f"User {user_id} activated")
+
+        # Publish Kafka event
+        event_data = UserActivatedEvent(
+            user_id=str(user.id),
+            username=user.email,
+            email=user.email,
+        )
+        event = EventEnvelope(
+            event_type=EventType.USER_ACTIVATED,
+            data=event_data.model_dump(),
+            metadata=EventMetadata(user_id=str(current_user.user_id)),
+        )
+        await publish_event("user-events", event)
 
         # Log audit event
         await audit_client.log_action(
@@ -506,6 +557,19 @@ async def delete_user(
         # Terminate employee
         if user.employee_id:
             await employee_client.update_employee_status(user.employee_id, "terminated")
+
+        # Publish Kafka event
+        event_data = UserDeletedEvent(
+            user_id=str(user.id),
+            username=user.email,
+            email=user.email,
+        )
+        event = EventEnvelope(
+            event_type=EventType.USER_DELETED,
+            data=event_data.model_dump(),
+            metadata=EventMetadata(user_id=str(current_user.user_id)),
+        )
+        await publish_event("user-events", event)
 
         # Log audit event
         await audit_client.log_action(

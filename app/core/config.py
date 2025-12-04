@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str = ""
     REDIS_DB: int = 0
 
+    # Kafka Settings
+    KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
+    KAFKA_ENABLED: bool = True
+
     # CORS Settings
     CORS_ORIGINS: str = "https://localhost,http://localhost:3000"
     CORS_ALLOW_CREDENTIALS: bool = True
