@@ -1,0 +1,22 @@
+name: User Management Service Build and Push
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build-and-push:
+    uses: PookieLand/workflows_hrms/.github/workflows/reusable-build-push.yml@v1.0.0
+    with:
+      servicePath: '.'
+      imageName: 'hrms/user-service'
+      registry: '475936984863.dkr.ecr.ap-south-1.amazonaws.com'
+      region: 'ap-south-1'
+      push_image: ${{ github.event_name == 'push' }}
+      gitops_repo: PookieLand/gitops-manifests
+      
+    secrets:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      GITOPS_REPO_TOKEN: ${{ secrets.GITOPS_REPO_TOKEN }}
