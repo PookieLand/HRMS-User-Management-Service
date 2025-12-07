@@ -4,10 +4,93 @@ Defines the SQLModel table structure for the User entity and Pydantic schemas
 with full support for Asgardeo integration, roles, permissions, and status tracking.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+
+
+class OnboardingInvitation(SQLModel, table=True):
+    """
+    Database model for tracking employee onboarding invitations.
+    Created when HR initiates onboarding, updated as employee completes signup steps.
+    """
+
+    __tablename__ = "onboarding_invitations"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    # Invitation identification
+    invitation_token: str = Field(
+        index=True, unique=True, max_length=100, description="Unique invitation token"
+    )
+
+    # Employee email and role
+    email: str = Field(index=True, max_length=255, description="Employee email")
+    role: str = Field(max_length=50, description="Assigned role")
+
+    # Job details
+    job_title: str = Field(max_length=100, description="Job title")
+    salary: float = Field(description="Monthly salary")
+    salary_currency: str = Field(default="USD", max_length=3)
+
+    # Employment type
+    employment_type: str = Field(
+        default="permanent", max_length=20, description="permanent or contract"
+    )
+
+    # Probation for permanent employees
+    probation_months: Optional[int] = Field(
+        default=None, description="Probation period in months"
+    )
+    probation_end_date: Optional[date] = Field(
+        default=None, description="Calculated probation end date"
+    )
+
+    # Contract dates for contract employees
+    contract_start_date: Optional[date] = Field(default=None)
+    contract_end_date: Optional[date] = Field(default=None)
+
+    # Department and team
+    department: Optional[str] = Field(default=None, max_length=100)
+    team: Optional[str] = Field(default=None, max_length=100)
+    manager_id: Optional[int] = Field(default=None)
+
+    # Important dates
+    joining_date: date = Field(description="Expected joining date")
+    performance_review_date: Optional[date] = Field(
+        default=None, description="Next performance review date (yearly anniversary)"
+    )
+    salary_increment_date: Optional[date] = Field(
+        default=None, description="Next salary increment date (yearly anniversary)"
+    )
+
+    # Notes
+    notes: Optional[str] = Field(default=None, max_length=500)
+
+    # Onboarding status tracking
+    status: str = Field(default="initiated", max_length=50)
+    initiated_by: int = Field(description="User ID who initiated onboarding")
+    initiated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    # Asgardeo tracking
+    asgardeo_id: Optional[str] = Field(default=None, max_length=255)
+
+    # Local records tracking
+    user_id: Optional[int] = Field(default=None)
+    employee_id: Optional[int] = Field(default=None)
+
+    # Timestamps
+    invitation_sent_at: Optional[datetime] = Field(default=None)
+    asgardeo_created_at: Optional[datetime] = Field(default=None)
+    employee_created_at: Optional[datetime] = Field(default=None)
+    completed_at: Optional[datetime] = Field(default=None)
+    expires_at: datetime = Field(description="Invitation expiry timestamp")
+
+    # Cancellation tracking
+    cancelled_at: Optional[datetime] = Field(default=None)
+    cancelled_by: Optional[int] = Field(default=None)
+    cancellation_reason: Optional[str] = Field(default=None, max_length=500)
 
 
 class User(SQLModel, table=True):

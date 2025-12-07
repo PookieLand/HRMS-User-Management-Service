@@ -1,14 +1,30 @@
+"""
+Authentication API endpoints for User Management Service.
+
+Provides endpoints for:
+- User signup (direct registration)
+- Profile management
+- Password change
+- Token verification
+"""
+
 from datetime import datetime
-from typing import Annotated, Optional
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
 from sqlmodel import Session, select
 
 from app.core.asgardeo import asgardeo_service
+from app.core.cache import cache_user_profile, invalidate_user_cache
 from app.core.config import settings
 from app.core.database import get_session
-from app.core.events import EventEnvelope, EventType
+from app.core.events import (
+    EventType,
+    UserCreatedEvent,
+    UserUpdatedEvent,
+    create_event,
+)
 from app.core.integrations import (
     audit_client,
     employee_client,
@@ -21,6 +37,7 @@ from app.core.security import (
     get_current_active_user,
     get_current_user,
 )
+from app.core.topics import KafkaTopics
 from app.models.users import (
     MessageResponse,
     SignupResponse,
@@ -37,7 +54,6 @@ router = APIRouter(
 )
 
 
-# Request/Response Models
 class SignupRequest(BaseModel):
     """Request body for user signup."""
 
@@ -55,8 +71,7 @@ class ChangePasswordRequest(BaseModel):
     new_password: str
 
 
-# Helper Functions
-def _validate_password_strength(password: str) -> tuple[bool, str]:
+def validate_password_strength(password: str) -> tuple[bool, str]:
     """
     Validate password against strength requirements.
 
@@ -86,7 +101,6 @@ def _validate_password_strength(password: str) -> tuple[bool, str]:
     return True, ""
 
 
-# Routes
 @router.post(
     "/signup", response_model=SignupResponse, status_code=status.HTTP_201_CREATED
 )
@@ -95,19 +109,19 @@ async def signup(
     session: Annotated[Session, Depends(get_session)],
 ):
     """
-    Sign up a new user.
+    Sign up a new user (direct registration).
 
-    This endpoint uses M2M (Machine-to-Machine) authentication to create
-    users in Asgardeo via SCIM2 API.
+    Note: This endpoint is for direct user signup. For HR-initiated
+    onboarding, use the /api/v1/onboarding endpoints.
 
     Process:
-    1. Validate input and password strength
+    1. Validate password strength
     2. Check email uniqueness
-    3. Create user in Asgardeo via SCIM2 (M2M)
-    4. Assign to default employee group
+    3. Create user in Asgardeo via SCIM2
+    4. Assign default employee role
     5. Create local user record
     6. Create employee record
-    7. Send welcome notification
+    7. Publish events and send notifications
 
     Args:
         request: Signup request with email, password, name, phone
@@ -115,19 +129,16 @@ async def signup(
 
     Returns:
         SignupResponse with user_id and status
-
-    Raises:
-        HTTPException: For various validation/creation errors
     """
     logger.info(f"Signup request for email: {request.email}")
 
     # Validate password strength
-    is_valid, error_msg = _validate_password_strength(request.password)
+    is_valid, error_msg = validate_password_strength(request.password)
     if not is_valid:
         logger.warning(f"Weak password for signup: {request.email}")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
 
-    # Check if email already exists in local database
+    # Check if email already exists
     existing_user = session.exec(
         select(User).where(User.email == request.email)
     ).first()
@@ -137,7 +148,7 @@ async def signup(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Email already exists"
         )
 
-    # Create user in Asgardeo via SCIM2 (using M2M credentials)
+    # Create user in Asgardeo
     try:
         asgardeo_data = await asgardeo_service.create_user(
             email=request.email,
@@ -147,7 +158,7 @@ async def signup(
             phone=request.phone,
         )
         asgardeo_id = asgardeo_data["asgardeo_id"]
-        logger.info(f"User created in Asgardeo via SCIM2: {asgardeo_id}")
+        logger.info(f"User created in Asgardeo: {asgardeo_id}")
     except Exception as e:
         logger.error(f"Failed to create user in Asgardeo: {e}")
         raise HTTPException(
@@ -155,42 +166,12 @@ async def signup(
             detail="Failed to create user in identity provider",
         )
 
-    # Assign user to default employee group (role)
+    # Assign default employee role
     try:
         await asgardeo_service.assign_role(asgardeo_id, "Employee")
-        logger.info(f"✅ Assigned default role (Employee) to user: {asgardeo_id}")
+        logger.info(f"Assigned default role (Employee) to user: {asgardeo_id}")
     except Exception as e:
-        error_str = str(e)
-        if "403" in error_str or "Forbidden" in error_str:
-            logger.error(
-                f"❌ 403 FORBIDDEN - M2M app lacks SCIM2 Groups API permissions!\n\n"
-                f"Error: {e}\n\n"
-                f"🔧 REQUIRED FIX (You have authorized scopes but Groups API itself is missing):\n"
-                f"1. Go to Asgardeo Console: https://console.asgardeo.io/\n"
-                f"2. Navigate to: Applications → Your M2M Application\n"
-                f"3. Click 'API Authorization' tab\n"
-                f"4. Click 'Authorize an API Resource' button\n"
-                f"5. In dropdown, select 'SCIM2 Groups API' (NOT just scopes!)\n"
-                f"6. Check ALL these scopes:\n"
-                f"   ✅ internal_group_mgt_view (REQUIRED for listing/searching)\n"
-                f"   ✅ internal_group_mgt_update (REQUIRED for adding users)\n"
-                f"   ✅ internal_group_mgt_create (optional)\n"
-                f"   ✅ internal_group_mgt_delete (optional)\n"
-                f"7. Click 'Finish'\n"
-                f"8. Verify authorization shows 'SCIM2 Groups API' in the list\n"
-                f"9. Also ensure 'Employees' group exists:\n"
-                f"   User Management → Groups → Create 'Employees' group if missing\n"
-                f"10. Run: scripts/test-m2m-permissions.sh to verify\n\n"
-                f"⚠️  User created in Asgardeo but NOT assigned to default role.\n"
-                f"   User will be able to login but may lack proper permissions."
-            )
-        else:
-            logger.error(
-                f"❌ FAILED to assign default role 'Employee' to user {asgardeo_id}\n"
-                f"Error: {e}\n\n"
-                f"This may be a network issue or the 'Employees' group doesn't exist.\n"
-                f"Check logs above for more details."
-            )
+        logger.warning(f"Failed to assign default role: {e}")
 
     # Create local user record
     try:
@@ -200,7 +181,7 @@ async def signup(
             first_name=request.first_name,
             last_name=request.last_name,
             phone=request.phone,
-            role="employee",  # Default role
+            role="employee",
             status="active",
         )
         session.add(db_user)
@@ -210,21 +191,21 @@ async def signup(
 
         # Publish user created event
         try:
-            event = EventEnvelope(
-                event_type=EventType.USER_CREATED,
-                data={
-                    "user_id": str(db_user.id),
-                    "email": db_user.email,
-                    "first_name": db_user.first_name,
-                    "last_name": db_user.last_name,
-                    "status": db_user.status,
-                    "role": db_user.role,
-                },
+            event_data = UserCreatedEvent(
+                user_id=db_user.id,
+                email=db_user.email,
+                first_name=db_user.first_name or "",
+                last_name=db_user.last_name or "",
+                role=db_user.role,
+                status=db_user.status,
+                asgardeo_id=asgardeo_id,
             )
-            await publish_event("user-events", event)
+            event = create_event(EventType.USER_CREATED, event_data)
+            await publish_event(KafkaTopics.USER_CREATED, event)
             logger.info(f"Published user created event for: {db_user.id}")
         except Exception as e:
             logger.warning(f"Failed to publish user created event: {e}")
+
     except Exception as e:
         logger.error(f"Failed to create user locally: {e}")
         # Try to clean up Asgardeo user
@@ -237,7 +218,7 @@ async def signup(
             detail="Failed to create user record",
         )
 
-    # Create employee record in employee service
+    # Create employee record
     try:
         employee_data = await employee_client.create_employee(
             user_id=db_user.id,
@@ -251,9 +232,9 @@ async def signup(
             session.add(db_user)
             session.commit()
             session.refresh(db_user)
-            logger.info(f"✅ Employee created successfully: {db_user.employee_id}")
+            logger.info(f"Employee created: {db_user.employee_id}")
     except Exception as e:
-        logger.warning(f"Failed to create employee record (non-blocking): {e}")
+        logger.warning(f"Failed to create employee record: {e}")
 
     # Log audit event
     try:
@@ -277,7 +258,7 @@ async def signup(
     except Exception as e:
         logger.warning(f"Failed to send welcome email: {e}")
 
-    logger.info(f"Signup completed successfully for: {request.email}")
+    logger.info(f"Signup completed for: {request.email}")
 
     return SignupResponse(
         user_id=db_user.id,
@@ -295,32 +276,23 @@ async def get_profile(
     """
     Get current user's profile.
 
-    This endpoint validates the Asgardeo JWT token (from frontend SPA login)
-    using JWKS public key verification.
-
-    Args:
-        current_user: Token data from validated Asgardeo JWT
-        session: Database session
+    Validates the Asgardeo JWT token and returns the user's profile
+    from the local database.
 
     Returns:
         User profile information
-
-    Raises:
-        HTTPException: 404 if user not found in local database
     """
-    # Extract asgardeo_id from token
     asgardeo_id = current_user.sub
 
-    # Look up user by asgardeo_id
     user = session.exec(select(User).where(User.asgardeo_id == asgardeo_id)).first()
 
     if not user:
-        logger.warning(f"User not found in database: {asgardeo_id}")
+        logger.warning(f"User not found: {asgardeo_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         )
 
-    # Update last login timestamp
+    # Update last login
     user.last_login = datetime.now()
     session.add(user)
     session.commit()
@@ -328,7 +300,7 @@ async def get_profile(
 
     logger.info(f"Profile accessed by user: {user.id}")
 
-    return UserProfileResponse(
+    profile = UserProfileResponse(
         id=user.id,
         asgardeo_id=user.asgardeo_id,
         email=user.email,
@@ -339,8 +311,14 @@ async def get_profile(
         employee_id=user.employee_id,
         status=user.status,
         created_at=user.created_at,
+        updated_at=user.updated_at,
         last_login=user.last_login,
     )
+
+    # Cache the profile
+    await cache_user_profile(user.id, profile.model_dump(mode="json"))
+
+    return profile
 
 
 @router.put("/users/me", response_model=UserProfileResponse)
@@ -352,9 +330,6 @@ async def update_profile(
     """
     Update current user's profile.
 
-    This endpoint validates the Asgardeo JWT token and allows users
-    to update their profile information.
-
     Args:
         update_data: Fields to update
         current_user: Token data from validated Asgardeo JWT
@@ -362,14 +337,9 @@ async def update_profile(
 
     Returns:
         Updated user profile
-
-    Raises:
-        HTTPException: 404 if user not found
     """
-    # Extract asgardeo_id from token
     asgardeo_id = current_user.sub
 
-    # Look up user by asgardeo_id
     user = session.exec(select(User).where(User.asgardeo_id == asgardeo_id)).first()
 
     if not user:
@@ -378,7 +348,7 @@ async def update_profile(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         )
 
-    # Update local database
+    # Update fields
     update_dict = update_data.model_dump(exclude_unset=True)
     for key, value in update_dict.items():
         if value is not None and hasattr(user, key):
@@ -391,19 +361,22 @@ async def update_profile(
 
     # Publish user updated event
     try:
-        event = EventEnvelope(
-            event_type=EventType.USER_UPDATED,
-            data={
-                "user_id": str(user.id),
-                "updated_fields": update_dict,
-            },
+        event_data = UserUpdatedEvent(
+            user_id=user.id,
+            email=user.email,
+            updated_fields=update_dict,
         )
-        await publish_event("user-events", event)
+        event = create_event(
+            EventType.USER_UPDATED,
+            event_data,
+            actor_user_id=str(user.id),
+        )
+        await publish_event(KafkaTopics.USER_UPDATED, event)
         logger.info(f"Published user updated event for: {user.id}")
     except Exception as e:
         logger.warning(f"Failed to publish user updated event: {e}")
 
-    # Sync to Asgardeo via SCIM2
+    # Sync to Asgardeo
     try:
         await asgardeo_service.update_user(
             asgardeo_id=user.asgardeo_id,
@@ -427,6 +400,9 @@ async def update_profile(
     except Exception as e:
         logger.warning(f"Failed to log profile update: {e}")
 
+    # Invalidate cache
+    await invalidate_user_cache(user.id)
+
     logger.info(f"Profile updated for user: {user.id}")
 
     return UserProfileResponse(
@@ -440,6 +416,7 @@ async def update_profile(
         employee_id=user.employee_id,
         status=user.status,
         created_at=user.created_at,
+        updated_at=user.updated_at,
         last_login=user.last_login,
     )
 
@@ -462,14 +439,9 @@ async def change_password(
 
     Returns:
         Success message
-
-    Raises:
-        HTTPException: 400 if password weak/invalid, 404 if user not found
     """
-    # Extract asgardeo_id from token
     asgardeo_id = current_user.sub
 
-    # Look up user
     user = session.exec(select(User).where(User.asgardeo_id == asgardeo_id)).first()
 
     if not user:
@@ -478,18 +450,18 @@ async def change_password(
             status_code=status.HTTP_404_NOT_FOUND, detail="User not found"
         )
 
-    # Validate new password strength
-    is_valid, error_msg = _validate_password_strength(request.new_password)
+    # Validate new password
+    is_valid, error_msg = validate_password_strength(request.new_password)
     if not is_valid:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=error_msg)
 
-    # Update password in Asgardeo via SCIM2
+    # Update password in Asgardeo
     try:
         await asgardeo_service.update_user(
             asgardeo_id=user.asgardeo_id,
             updates={"password": request.new_password},
         )
-        logger.info(f"Password changed in Asgardeo for user: {user.id}")
+        logger.info(f"Password changed for user: {user.id}")
     except Exception as e:
         logger.error(f"Failed to change password in Asgardeo: {e}")
         raise HTTPException(
@@ -528,10 +500,7 @@ async def verify_token(
     """
     Verify that provided Asgardeo JWT token is valid.
 
-    This uses JWKS validation to verify the token signature.
-
-    Args:
-        current_user: Token data from validated Asgardeo JWT
+    Uses JWKS validation to verify the token signature.
 
     Returns:
         Token validity status and user information
@@ -541,6 +510,7 @@ async def verify_token(
         "asgardeo_id": current_user.sub,
         "email": current_user.email,
         "groups": current_user.groups,
+        "roles": current_user.roles,
         "message": "Token is valid",
     }
 
@@ -551,9 +521,6 @@ async def whoami(
 ) -> dict:
     """
     Get current user information from Asgardeo JWT token claims.
-
-    Args:
-        current_user: Token data from validated Asgardeo JWT
 
     Returns:
         User identification, roles, and groups from token
@@ -576,25 +543,14 @@ async def logout(
     """
     Logout endpoint.
 
-    In this SPA architecture, logout is primarily client-side:
-    - Frontend clears the token from sessionStorage
-    - Frontend uses Asgardeo SDK signOut() method
-    - Backend can log the event for audit purposes
-
-    Args:
-        current_user: Token data from validated Asgardeo JWT
+    In SPA architecture, logout is primarily client-side:
+    - Frontend clears the token
+    - Frontend uses Asgardeo SDK signOut()
+    - Backend logs the event for audit
 
     Returns:
         Success message
     """
     logger.info(f"User logout: {current_user.sub}")
-
-    # Log audit event (optional)
-    try:
-        # Look up user ID from asgardeo_id if needed for audit
-        # For now, just log with asgardeo_id
-        logger.info(f"Logout event for Asgardeo user: {current_user.sub}")
-    except Exception as e:
-        logger.warning(f"Failed to log logout event: {e}")
 
     return MessageResponse(message="Logged out successfully")
