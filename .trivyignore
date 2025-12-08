@@ -1,0 +1,2 @@
+## This file tells Trivy which vulnerabilities to ignore during scans.
+## Make sure to keep this file updated and in the root of the service directory.

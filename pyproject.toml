@@ -15,4 +15,5 @@ dependencies = [
     "httpx>=0.25.0",
     "redis>=5.0.0",
     "aiokafka>=0.11.0",
+    "urllib3>=2.6.0",
 ]

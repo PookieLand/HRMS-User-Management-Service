@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-and-push:
-    uses: PookieLand/workflows_hrms/.github/workflows/reusable-build-push.yml@v1.0.0
+    uses: PookieLand/workflows_hrms/.github/workflows/reusable-build-push.yml@v1.0.1
     with:
       servicePath: '.'
       imageName: 'hrms/user-service'
