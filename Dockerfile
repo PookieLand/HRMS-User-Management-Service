@@ -1,12 +1,17 @@
 FROM python:3.13-alpine3.22 AS builder
 
-# Install build dependencies only in builder stage
-RUN apk add --no-cache \
-    pkgconfig \
+# Install system dependencies for mysqlclient and confluent-kafka (librdkafka v2.12.1+)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    default-libmysqlclient-dev \
+    pkg-config \
     gcc \
-    musl-dev \
-    mariadb-dev \
-    mariadb-connector-c-dev
+    curl \
+    gnupg \
+    && curl -fsSL https://packages.confluent.io/deb/7.9/archive.key | gpg --dearmor -o /usr/share/keyrings/confluent-archive-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/confluent-archive-keyring.gpg] https://packages.confluent.io/deb/7.9 stable main" > /etc/apt/sources.list.d/confluent.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends librdkafka-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -15,7 +20,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 COPY . /app
 WORKDIR /app
 
-# Install the application dependencies using uv sync
+# Setup the working directory
+WORKDIR /app
+# Install the application dependencies.
 RUN uv sync --frozen
 
 # Strip binaries to reduce size
@@ -67,9 +74,8 @@ USER appuser
 EXPOSE 8000
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD /app/.venv/bin/python -c "import httpx; r = httpx.get('http://localhost:8000/health'); exit(0 if r.status_code == 200 else 1)" || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
 
 # Run the application
 CMD ["/app/.venv/bin/fastapi", "run", "app/main.py", "--port", "8000", "--host", "0.0.0.0"]
-

@@ -26,8 +26,6 @@ from app.api.dependencies import SessionDep, TokenData, get_current_active_user
 from app.core.asgardeo import asgardeo_service
 from app.core.config import settings
 from app.core.events import (
-    EventEnvelope,
-    EventMetadata,
     EventType,
     OnboardingAsgardeoUserCreatedEvent,
     OnboardingCancelledEvent,
@@ -41,7 +39,7 @@ from app.core.events import (
 from app.core.integrations import employee_client, notification_client
 from app.core.kafka import publish_event
 from app.core.logging import get_logger
-from app.core.rbac import RBACManager, get_highest_role
+from app.core.rbac import get_highest_role
 from app.core.topics import KafkaTopics
 from app.models.onboarding import (
     CancelOnboardingRequest,
@@ -546,15 +544,17 @@ async def signup_step1(
 
     # Assign role in Asgardeo
     try:
-        # Map role to Asgardeo group
+        # Map invitation role to Asgardeo role name expected by assign_role
+        # assign_role expects: HR_Admin, HR_Manager, Manager, Employee
         role_mapping = {
-            "HR_Manager": "HR-Managers",
-            "manager": "Team-Managers",
-            "employee": "Employees",
+            "HR_Admin": "HR_Admin",
+            "HR_Manager": "HR_Manager",
+            "manager": "Manager",
+            "employee": "Employee",
         }
-        asgardeo_group = role_mapping.get(invitation.role, "Employees")
-        await asgardeo_service.assign_role(asgardeo_id, asgardeo_group)
-        logger.info(f"Assigned role {invitation.role} to user {asgardeo_id}")
+        asgardeo_role = role_mapping.get(invitation.role, "Employee")
+        await asgardeo_service.assign_role(asgardeo_id, asgardeo_role)
+        logger.info(f"Assigned role {asgardeo_role} to user {asgardeo_id}")
     except Exception as e:
         logger.warning(f"Failed to assign role in Asgardeo (non-blocking): {e}")
 
@@ -685,66 +685,46 @@ async def signup_step2(
             detail="User record not found",
         )
 
-    # Create employee record in employee service
+    # Create employee record in employee service with full onboarding data
     try:
-        # Build employee payload with all the onboarding data
-        employee_payload = {
-            "user_id": db_user.id,
-            "email": invitation.email,
-            "first_name": db_user.first_name,
-            "last_name": db_user.last_name,
-            "phone": db_user.phone,
-            "role": invitation.role,
-            "job_title": invitation.job_title,
-            "salary": invitation.salary,
-            "salary_currency": invitation.salary_currency,
-            "employment_type": invitation.employment_type,
-            "department": invitation.department,
-            "team": invitation.team,
-            "manager_id": invitation.manager_id,
-            "joining_date": str(invitation.joining_date),
-            "probation_months": invitation.probation_months,
-            "probation_end_date": str(invitation.probation_end_date)
-            if invitation.probation_end_date
-            else None,
-            "contract_start_date": str(invitation.contract_start_date)
-            if invitation.contract_start_date
-            else None,
-            "contract_end_date": str(invitation.contract_end_date)
-            if invitation.contract_end_date
-            else None,
-            "performance_review_date": str(invitation.performance_review_date)
-            if invitation.performance_review_date
-            else None,
-            "salary_increment_date": str(invitation.salary_increment_date)
-            if invitation.salary_increment_date
-            else None,
-            # Personal details from step 2
-            "date_of_birth": str(request.date_of_birth)
-            if request.date_of_birth
-            else None,
-            "gender": request.gender,
-            "nationality": request.nationality,
-            "address_line_1": request.address_line_1,
-            "address_line_2": request.address_line_2,
-            "city": request.city,
-            "state": request.state,
-            "country": request.country,
-            "postal_code": request.postal_code,
-            "emergency_contact_name": request.emergency_contact_name,
-            "emergency_contact_phone": request.emergency_contact_phone,
-            "emergency_contact_relationship": request.emergency_contact_relationship,
-            "bank_name": request.bank_name,
-            "bank_account_number": request.bank_account_number,
-            "bank_routing_number": request.bank_routing_number,
-        }
-
-        employee_data = await employee_client.create_employee(
+        # Use the comprehensive onboarding endpoint with all HR and personal data
+        employee_data = await employee_client.create_employee_from_onboarding(
             user_id=db_user.id,
             email=invitation.email,
             first_name=db_user.first_name,
             last_name=db_user.last_name,
             phone=db_user.phone,
+            role=invitation.role,
+            job_title=invitation.job_title,
+            department=invitation.department,
+            team=invitation.team,
+            manager_id=invitation.manager_id,
+            salary=invitation.salary,
+            salary_currency=invitation.salary_currency,
+            employment_type=invitation.employment_type,
+            joining_date=invitation.joining_date,
+            probation_months=invitation.probation_months,
+            probation_end_date=invitation.probation_end_date,
+            contract_start_date=invitation.contract_start_date,
+            contract_end_date=invitation.contract_end_date,
+            performance_review_date=invitation.performance_review_date,
+            salary_increment_date=invitation.salary_increment_date,
+            # Personal details from step 2
+            date_of_birth=request.date_of_birth,
+            gender=request.gender,
+            nationality=request.nationality,
+            address_line_1=request.address_line_1,
+            address_line_2=request.address_line_2,
+            city=request.city,
+            state=request.state,
+            country=request.country,
+            postal_code=request.postal_code,
+            emergency_contact_name=request.emergency_contact_name,
+            emergency_contact_phone=request.emergency_contact_phone,
+            emergency_contact_relationship=request.emergency_contact_relationship,
+            bank_name=request.bank_name,
+            bank_account_number=request.bank_account_number,
+            bank_routing_number=request.bank_routing_number,
         )
 
         if employee_data:
@@ -752,7 +732,9 @@ async def signup_step2(
             db_user.employee_id = employee_id
             session.add(db_user)
             session.commit()
-            logger.info(f"Created employee record: {employee_id}")
+            logger.info(
+                f"Created employee record with full onboarding data: {employee_id}"
+            )
         else:
             # Employee service might be unavailable, but we can still continue
             employee_id = None

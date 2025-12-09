@@ -536,6 +536,48 @@ async def whoami(
     }
 
 
+@router.get("/debug-token")
+async def debug_token(
+    current_user: Annotated[TokenData, Depends(get_current_user)],
+) -> dict:
+    """
+    Debug endpoint to inspect JWT token claims.
+
+    This endpoint is useful for troubleshooting authentication and
+    role assignment issues. It shows both the raw claims from the
+    token and the processed/mapped values.
+
+    WARNING: This endpoint should be disabled or protected in production.
+
+    Returns:
+        Detailed token information including raw claims
+    """
+    return {
+        "processed": {
+            "asgardeo_id": current_user.sub,
+            "email": current_user.email,
+            "username": current_user.username,
+            "roles": current_user.roles,
+            "groups": current_user.groups,
+            "permissions": current_user.permissions,
+            "issuer": current_user.iss,
+            "audience": current_user.aud,
+            "expires_at": current_user.exp,
+            "issued_at": current_user.iat,
+        },
+        "raw_claims": current_user.raw_claims,
+        "notes": {
+            "role_mapping": "Groups like 'HR_Administrators' are mapped to 'HR_Admin'",
+            "expected_groups": {
+                "HR_Administrators": "HR_Admin",
+                "HR_Managers": "HR_Manager",
+                "Team_Managers": "manager",
+                "Employees": "employee",
+            },
+        },
+    }
+
+
 @router.post("/logout", response_model=MessageResponse)
 async def logout(
     current_user: Annotated[TokenData, Depends(get_current_user)],

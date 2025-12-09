@@ -1,5 +1,3 @@
-import json
-from datetime import datetime, timedelta
 from typing import Annotated, Any, List
 
 import jwt
@@ -13,6 +11,68 @@ from app.core.logging import get_logger
 from app.core.rbac import RBACManager
 
 logger = get_logger(__name__)
+
+# Reverse mapping: Asgardeo group names -> application role names
+# Supports multiple naming conventions (hyphen, underscore, various formats)
+ASGARDEO_GROUP_TO_ROLE = {
+    # HR Admin variants
+    "HR_Administrators": "HR_Admin",
+    "HR-Administrators": "HR_Admin",
+    "HR_Admins": "HR_Admin",
+    "HR-Admins": "HR_Admin",
+    "HR_Admin": "HR_Admin",
+    "HR-Admin": "HR_Admin",
+    "HRAdministrators": "HR_Admin",
+    "HRAdmin": "HR_Admin",
+    # HR Manager variants
+    "HR_Managers": "HR_Manager",
+    "HR-Managers": "HR_Manager",
+    "HR_Manager": "HR_Manager",
+    "HR-Manager": "HR_Manager",
+    "HRManagers": "HR_Manager",
+    "HRManager": "HR_Manager",
+    # Manager variants
+    "Team_Managers": "manager",
+    "Team-Managers": "manager",
+    "TeamManagers": "manager",
+    "Managers": "manager",
+    "Manager": "manager",
+    "manager": "manager",
+    # Employee variants
+    "Employees": "employee",
+    "Employee": "employee",
+    "employee": "employee",
+}
+
+
+def map_groups_to_roles(groups: List[str]) -> List[str]:
+    """
+    Map Asgardeo group names to application role names.
+
+    Args:
+        groups: List of Asgardeo group names from JWT token
+
+    Returns:
+        List of mapped application role names
+    """
+    roles = []
+    for group in groups:
+        # Remove leading slash if present (e.g., "/HR-Administrators" -> "HR-Administrators")
+        clean_group = group.lstrip("/")
+
+        # Check if this group maps to a role
+        if clean_group in ASGARDEO_GROUP_TO_ROLE:
+            role = ASGARDEO_GROUP_TO_ROLE[clean_group]
+            if role not in roles:
+                roles.append(role)
+        elif not group.startswith("/"):
+            # Keep non-path groups that don't have a mapping (might be a direct role name)
+            if group not in roles:
+                roles.append(group)
+
+    logger.debug(f"Mapped groups {groups} to roles {roles}")
+    return roles
+
 
 # HTTP Bearer scheme for JWT tokens
 security = HTTPBearer()
@@ -95,29 +155,48 @@ def decode_token(token: str) -> TokenData:
             )
 
         logger.info(f"Token decoded successfully for subject: {payload.get('sub')}")
+        logger.debug(f"Token payload keys: {list(payload.keys())}")
 
-        # Extract roles from various possible claim locations
-        roles = []
-        if "roles" in payload:
-            roles = (
-                payload["roles"]
-                if isinstance(payload["roles"], list)
-                else [payload["roles"]]
-            )
-        elif "role" in payload:
-            roles = (
-                payload["role"]
-                if isinstance(payload["role"], list)
-                else [payload["role"]]
-            )
-        elif "groups" in payload:
-            # Sometimes roles are in groups
+        # Extract groups first (Asgardeo puts role info in groups claim)
+        groups = []
+        if "groups" in payload:
             groups = (
                 payload["groups"]
                 if isinstance(payload["groups"], list)
                 else [payload["groups"]]
             )
-            roles = [g for g in groups if not g.startswith("/")]
+            logger.debug(f"Found groups in token: {groups}")
+
+        # Extract roles from various possible claim locations
+        roles = []
+        if "roles" in payload:
+            raw_roles = (
+                payload["roles"]
+                if isinstance(payload["roles"], list)
+                else [payload["roles"]]
+            )
+            # Map any Asgardeo group names to application roles
+            roles = map_groups_to_roles(raw_roles)
+        elif "role" in payload:
+            raw_roles = (
+                payload["role"]
+                if isinstance(payload["role"], list)
+                else [payload["role"]]
+            )
+            # Map any Asgardeo group names to application roles
+            roles = map_groups_to_roles(raw_roles)
+        elif groups:
+            # Map Asgardeo groups to application roles
+            roles = map_groups_to_roles(groups)
+
+        # If no roles found, default to employee
+        if not roles:
+            logger.warning(
+                f"No roles found in token for user {payload.get('sub')}, defaulting to 'employee'"
+            )
+            roles = ["employee"]
+
+        logger.info(f"User {payload.get('sub')} has roles: {roles}")
 
         # Extract permissions
         permissions = []
@@ -132,14 +211,7 @@ def decode_token(token: str) -> TokenData:
             scopes = payload["scope"]
             permissions = scopes.split() if isinstance(scopes, str) else scopes
 
-        # Extract groups
-        groups = []
-        if "groups" in payload:
-            groups = (
-                payload["groups"]
-                if isinstance(payload["groups"], list)
-                else [payload["groups"]]
-            )
+        # Groups were already extracted above
 
         # Create TokenData object
         token_data = TokenData(

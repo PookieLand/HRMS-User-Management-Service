@@ -272,11 +272,14 @@ class AsgardeoService:
         """
         try:
             # Map application roles to Asgardeo groups
+            # Using underscore format to match actual Asgardeo group names
             role_group_mapping = {
-                "HR_Admin": "HR-Administrators",
-                "HR_Manager": "HR-Managers",
-                "Manager": "Team-Managers",
+                "HR_Admin": "HR_Administrators",
+                "HR_Manager": "HR_Managers",
+                "Manager": "Team_Managers",
+                "manager": "Team_Managers",
                 "Employee": "Employees",
+                "employee": "Employees",
             }
 
             group_name = role_group_mapping.get(role_name)
@@ -319,11 +322,14 @@ class AsgardeoService:
         """
         try:
             # Map application roles to Asgardeo groups
+            # Using underscore format to match actual Asgardeo group names
             role_group_mapping = {
-                "HR_Admin": "HR-Administrators",
-                "HR_Manager": "HR-Managers",
-                "Manager": "Team-Managers",
+                "HR_Admin": "HR_Administrators",
+                "HR_Manager": "HR_Managers",
+                "Manager": "Team_Managers",
+                "manager": "Team_Managers",
                 "Employee": "Employees",
+                "employee": "Employees",
             }
 
             group_name = role_group_mapping.get(role_name)

@@ -61,10 +61,10 @@ async def lifespan(_: FastAPI):
     logger.info(f"Database: {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
     logger.info(f"Redis Cache: {settings.REDIS_HOST}:{settings.REDIS_PORT}")
     logger.info(f"Employee Service: {settings.EMPLOYEE_SERVICE_URL}")
-    logger.info(f"Attendance Service: {settings.LEAVE_SERVICE_URL}")
+    logger.info(f"Attendance Service: {settings.ATTENDANCE_SERVICE_URL}")
     logger.info(f"Leave Service: {settings.LEAVE_SERVICE_URL}")
-    logger.info(f"Notification Service: {settings.NOTIFICATION_SERVICE_URL}")
     logger.info(f"Audit Service: {settings.AUDIT_SERVICE_URL}")
+    logger.info(f"Notification Service: {settings.NOTIFICATION_SERVICE_URL}")
     logger.info(f"Compliance Service: {settings.COMPLIANCE_SERVICE_URL}")
 
     # Initialize database
@@ -151,6 +151,141 @@ async def health_check():
         "service": settings.APP_NAME,
         "version": settings.APP_VERSION,
     }
+
+
+@app.get("/health/detailed", tags=["health"])
+async def detailed_health_check():
+    """
+    Detailed health check including all dependencies.
+
+    Returns status of:
+    - Database connection
+    - Redis connection
+    - Kafka connection
+    - Asgardeo M2M authentication
+    """
+    from app.core.asgardeo import get_asgardeo_service
+
+    health_status = {
+        "status": "healthy",
+        "service": settings.APP_NAME,
+        "version": settings.APP_VERSION,
+        "checks": {
+            "database": {"status": "unknown"},
+            "redis": {"status": "unknown"},
+            "kafka": {"status": "unknown"},
+            "asgardeo_m2m": {"status": "unknown"},
+        },
+    }
+
+    overall_healthy = True
+
+    # Check Database
+    try:
+        from sqlalchemy import text
+
+        from app.core.database import engine
+
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        health_status["checks"]["database"] = {"status": "healthy"}
+    except Exception as e:
+        health_status["checks"]["database"] = {
+            "status": "unhealthy",
+            "error": str(e),
+        }
+        overall_healthy = False
+
+    # Check Redis
+    try:
+        await cache.set("health_check", "ok", ttl=10)
+        result = await cache.get("health_check")
+        if result == "ok":
+            health_status["checks"]["redis"] = {"status": "healthy"}
+        else:
+            health_status["checks"]["redis"] = {
+                "status": "unhealthy",
+                "error": "Cache read/write failed",
+            }
+            overall_healthy = False
+    except Exception as e:
+        health_status["checks"]["redis"] = {
+            "status": "unhealthy",
+            "error": str(e),
+        }
+        overall_healthy = False
+
+    # Check Kafka
+    try:
+        if settings.KAFKA_ENABLED:
+            # Just check if we can create producer config
+            health_status["checks"]["kafka"] = {
+                "status": "healthy",
+                "bootstrap_servers": settings.KAFKA_BOOTSTRAP_SERVERS,
+            }
+        else:
+            health_status["checks"]["kafka"] = {
+                "status": "disabled",
+            }
+    except Exception as e:
+        health_status["checks"]["kafka"] = {
+            "status": "unhealthy",
+            "error": str(e),
+        }
+        overall_healthy = False
+
+    # Check Asgardeo M2M Connection
+    try:
+        asgardeo_service = get_asgardeo_service()
+
+        # Check if credentials are configured
+        client = asgardeo_service.client
+        if not client.config.client_id or not client.config.client_secret:
+            health_status["checks"]["asgardeo_m2m"] = {
+                "status": "unhealthy",
+                "error": "Client credentials not configured",
+                "organization": client.config.organization,
+                "client_id_set": bool(client.config.client_id),
+                "client_secret_set": bool(client.config.client_secret),
+                "troubleshooting": [
+                    "Set ASGARDEO_CLIENT_ID in environment",
+                    "Set ASGARDEO_CLIENT_SECRET in environment",
+                ],
+            }
+            overall_healthy = False
+        else:
+            # Try to get a token
+            m2m_result = await client.test_m2m_connection()
+            if m2m_result["success"]:
+                health_status["checks"]["asgardeo_m2m"] = {
+                    "status": "healthy",
+                    "organization": client.config.organization,
+                    "token_url": client.token_url,
+                    "scopes_granted": m2m_result.get("token_info", {}).get("scope"),
+                }
+            else:
+                health_status["checks"]["asgardeo_m2m"] = {
+                    "status": "unhealthy",
+                    "organization": client.config.organization,
+                    "error": m2m_result.get("error"),
+                    "troubleshooting": m2m_result.get("troubleshooting", []),
+                }
+                overall_healthy = False
+    except Exception as e:
+        health_status["checks"]["asgardeo_m2m"] = {
+            "status": "unhealthy",
+            "error": f"{type(e).__name__}: {str(e)}",
+            "troubleshooting": [
+                "Check ASGARDEO_ORG environment variable",
+                "Check ASGARDEO_CLIENT_ID environment variable",
+                "Check ASGARDEO_CLIENT_SECRET environment variable",
+            ],
+        }
+        overall_healthy = False
+
+    health_status["status"] = "healthy" if overall_healthy else "unhealthy"
+
+    return health_status
 
 
 # Dashboard metrics endpoint with Redis caching
@@ -270,6 +405,56 @@ async def trigger_daily_checks():
     logger.info("Manual daily checks triggered")
     await daily_scheduler.run_daily_checks()
     return {"message": "Daily checks executed successfully"}
+
+
+# Test M2M Asgardeo connection (for debugging purposes)
+@app.get("/api/v1/admin/test-asgardeo-m2m", tags=["admin"])
+async def test_asgardeo_m2m_connection():
+    """
+    Test the Machine-to-Machine (M2M) connection to Asgardeo.
+
+    This endpoint attempts to authenticate with Asgardeo using the
+    configured client credentials and returns detailed diagnostics.
+
+    Use this to troubleshoot issues with:
+    - User creation in Asgardeo
+    - Group/role assignment
+    - Any SCIM API operations
+
+    Returns:
+        Detailed connection test results including:
+        - Whether authentication succeeded
+        - Token information (if successful)
+        - Error details and troubleshooting tips (if failed)
+    """
+    from app.core.asgardeo import get_asgardeo_service
+
+    logger.info("=" * 60)
+    logger.info("ADMIN: Testing Asgardeo M2M Connection")
+    logger.info("=" * 60)
+
+    try:
+        asgardeo_service = get_asgardeo_service()
+        result = await asgardeo_service.client.test_m2m_connection()
+
+        if result["success"]:
+            logger.info("Asgardeo M2M connection test PASSED")
+        else:
+            logger.error(f"Asgardeo M2M connection test FAILED: {result.get('error')}")
+
+        return result
+    except Exception as e:
+        logger.error(f"Failed to test Asgardeo connection: {e}")
+        return {
+            "success": False,
+            "error": f"{type(e).__name__}: {str(e)}",
+            "troubleshooting": [
+                "Check that ASGARDEO_ORG is set in environment",
+                "Check that ASGARDEO_CLIENT_ID is set in environment",
+                "Check that ASGARDEO_CLIENT_SECRET is set in environment",
+                "Verify the service started correctly",
+            ],
+        }
 
 
 # Invalidate cache endpoint (for admin purposes)

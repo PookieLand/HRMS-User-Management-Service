@@ -65,11 +65,12 @@ class Settings(BaseSettings):
         return [self.CORS_ORIGINS]
 
     # Service URLs for Integration
+    # Ports: user=8000, employee=8001, attendance=8002, leave=8003, audit=8004, notification=8005, compliance=8006
     EMPLOYEE_SERVICE_URL: str = "http://employee-service:8001"
-    ATTENDANCE_SERVICE_URL: str = "http://employee-service:8002"
-    LEAVE_SERVICE_URL: str = "http://employee-service:8003"
-    NOTIFICATION_SERVICE_URL: str = "http://notification-service:8004"
-    AUDIT_SERVICE_URL: str = "http://audit-service:8005"
+    ATTENDANCE_SERVICE_URL: str = "http://attendance-service:8002"
+    LEAVE_SERVICE_URL: str = "http://leave-service:8003"
+    AUDIT_SERVICE_URL: str = "http://audit-service:8004"
+    NOTIFICATION_SERVICE_URL: str = "http://notification-service:8005"
     COMPLIANCE_SERVICE_URL: str = "http://compliance-service:8006"
 
     # Service Integration Settings
@@ -174,10 +175,13 @@ class Settings(BaseSettings):
     }
 
     # Asgardeo Group Mapping
+    # Using underscore format to match actual Asgardeo group names
     ASGARDEO_GROUP_MAPPING: dict = {
-        "HR_Admin": "HR-Administrators",
-        "HR_Manager": "HR-Managers",
-        "manager": "Team-Managers",
+        "HR_Admin": "HR_Administrators",
+        "HR_Manager": "HR_Managers",
+        "Manager": "Team_Managers",
+        "manager": "Team_Managers",
+        "Employee": "Employees",
         "employee": "Employees",
     }
 

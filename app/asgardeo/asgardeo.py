@@ -12,11 +12,14 @@ OAuth2 Client Credentials flow for machine-to-machine authentication.
 """
 
 import base64
+import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 import httpx
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class AsgardeoConfig(BaseModel):
@@ -96,6 +99,26 @@ class AsgardeoClient:
         self.token_url = f"{config.base_url}/t/{config.organization}/oauth2/token"
         self.scim_base_url = f"{config.base_url}/t/{config.organization}/scim2"
 
+        # Log initialization
+        logger.info("=" * 60)
+        logger.info("ASGARDEO CLIENT INITIALIZED")
+        logger.info("=" * 60)
+        logger.info(f"Organization: {config.organization}")
+        logger.info(f"Token URL: {self.token_url}")
+        logger.info(f"SCIM Base URL: {self.scim_base_url}")
+        logger.info(
+            f"Client ID configured: {'Yes' if config.client_id else 'NO - MISSING!'}"
+        )
+        logger.info(
+            f"Client Secret configured: {'Yes' if config.client_secret else 'NO - MISSING!'}"
+        )
+        if not config.client_id or not config.client_secret:
+            logger.error("WARNING: Client credentials are missing! M2M auth will fail.")
+            logger.error(
+                "Set ASGARDEO_CLIENT_ID and ASGARDEO_CLIENT_SECRET in environment."
+            )
+        logger.info("=" * 60)
+
     async def close(self):
         """Close the HTTP client"""
         await self._http_client.aclose()
@@ -129,6 +152,19 @@ class AsgardeoClient:
         Raises:
             httpx.HTTPStatusError: If token request fails
         """
+        logger.info("=" * 60)
+        logger.info("M2M AUTHENTICATION: Starting OAuth2 Client Credentials flow")
+        logger.info("=" * 60)
+        logger.info(f"Token URL: {self.token_url}")
+        logger.info(f"Organization: {self.config.organization}")
+        logger.info(
+            f"Client ID: {self.config.client_id[:8]}...{self.config.client_id[-4:] if len(self.config.client_id) > 12 else '****'}"
+        )
+        logger.info(
+            f"Client Secret: {'*' * 8}...{self.config.client_secret[-4:] if len(self.config.client_secret) > 4 else '****'}"
+        )
+        logger.info(f"Requested scopes: {scopes}")
+
         headers = {
             "Authorization": self._get_basic_auth_header(),
             "Content-Type": "application/x-www-form-urlencoded",
@@ -136,13 +172,80 @@ class AsgardeoClient:
 
         data = {"grant_type": "client_credentials", "scope": " ".join(scopes)}
 
-        response = await self._http_client.post(
-            self.token_url, headers=headers, data=data
+        logger.debug(
+            f"Request headers (auth redacted): Content-Type={headers['Content-Type']}"
         )
-        response.raise_for_status()
+        logger.debug(
+            f"Request data: grant_type={data['grant_type']}, scope={data['scope']}"
+        )
 
-        token_data = response.json()
-        return TokenResponse(**token_data)
+        try:
+            response = await self._http_client.post(
+                self.token_url, headers=headers, data=data
+            )
+
+            logger.info(f"M2M AUTH Response Status: {response.status_code}")
+
+            if not response.is_success:
+                logger.error("=" * 60)
+                logger.error("M2M AUTHENTICATION FAILED!")
+                logger.error("=" * 60)
+                logger.error(f"Status Code: {response.status_code}")
+                logger.error(f"Response Headers: {dict(response.headers)}")
+                try:
+                    error_body = response.json()
+                    logger.error(f"Error Response Body: {error_body}")
+                    if "error" in error_body:
+                        logger.error(f"Error Type: {error_body.get('error')}")
+                        logger.error(
+                            f"Error Description: {error_body.get('error_description', 'No description')}"
+                        )
+                except Exception:
+                    logger.error(f"Error Response Text: {response.text}")
+
+                logger.error("-" * 60)
+                logger.error("TROUBLESHOOTING CHECKLIST:")
+                logger.error("1. Is ASGARDEO_CLIENT_ID set correctly in environment?")
+                logger.error(
+                    "2. Is ASGARDEO_CLIENT_SECRET set correctly in environment?"
+                )
+                logger.error(
+                    "3. Is ASGARDEO_ORG set correctly (should be: pookieland)?"
+                )
+                logger.error("4. Is the M2M application created in Asgardeo Console?")
+                logger.error("5. Does the M2M app have the required API permissions?")
+                logger.error(
+                    "   Required scopes: internal_user_mgt_create, internal_user_mgt_view,"
+                )
+                logger.error(
+                    "   internal_user_mgt_list, internal_group_mgt_view, internal_group_mgt_update"
+                )
+                logger.error(
+                    "6. Is the M2M application's protocol set to 'Client Credentials'?"
+                )
+                logger.error("-" * 60)
+
+            response.raise_for_status()
+
+            token_data = response.json()
+            logger.info("=" * 60)
+            logger.info("M2M AUTHENTICATION SUCCESSFUL!")
+            logger.info("=" * 60)
+            logger.info(f"Token Type: {token_data.get('token_type')}")
+            logger.info(f"Expires In: {token_data.get('expires_in')} seconds")
+            logger.info(f"Granted Scopes: {token_data.get('scope', 'Not returned')}")
+            logger.info(
+                f"Access Token: {token_data.get('access_token', '')[:20]}...{token_data.get('access_token', '')[-10:]}"
+            )
+
+            return TokenResponse(**token_data)
+
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Error during M2M auth: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during M2M auth: {type(e).__name__}: {e}")
+            raise
 
     async def get_access_token(self, scopes: Optional[List[str]] = None) -> str:
         """
@@ -161,10 +264,76 @@ class AsgardeoClient:
             )
 
         # Check if we need to fetch a new token
-        if self._token is None or self._token.needs_refresh:
+        if self._token is None:
+            logger.info("No cached token, fetching new M2M access token...")
             self._token = await self._fetch_access_token(scopes)
+        elif self._token.needs_refresh:
+            logger.info("Cached token needs refresh, fetching new M2M access token...")
+            self._token = await self._fetch_access_token(scopes)
+        else:
+            logger.debug("Using cached M2M access token")
 
         return self._token.access_token
+
+    async def test_m2m_connection(self) -> Dict[str, Any]:
+        """
+        Test the M2M connection to Asgardeo.
+
+        This method attempts to authenticate and provides detailed diagnostics.
+
+        Returns:
+            Dictionary with connection test results
+        """
+        result = {
+            "success": False,
+            "token_url": self.token_url,
+            "organization": self.config.organization,
+            "client_id_preview": f"{self.config.client_id[:8]}...{self.config.client_id[-4:]}"
+            if len(self.config.client_id) > 12
+            else "***",
+            "scim_base_url": self.scim_base_url,
+            "error": None,
+            "token_info": None,
+            "troubleshooting": [],
+        }
+
+        try:
+            logger.info("Testing M2M connection to Asgardeo...")
+
+            # Try to get an access token
+            token = await self.get_access_token()
+
+            result["success"] = True
+            result["token_info"] = {
+                "token_type": self._token.token_type if self._token else None,
+                "expires_in": self._token.expires_in if self._token else None,
+                "scope": self._token.scope if self._token else None,
+                "token_preview": f"{token[:20]}...{token[-10:]}" if token else None,
+            }
+
+            logger.info("M2M connection test PASSED!")
+
+        except httpx.HTTPStatusError as e:
+            result["error"] = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+            result["troubleshooting"] = [
+                "Check ASGARDEO_CLIENT_ID is correct",
+                "Check ASGARDEO_CLIENT_SECRET is correct",
+                "Check ASGARDEO_ORG matches your Asgardeo organization",
+                "Verify M2M application exists in Asgardeo Console",
+                "Verify M2M application has required API permissions",
+                "Ensure application protocol is 'Client Credentials'",
+            ]
+            logger.error(f"M2M connection test FAILED: {result['error']}")
+
+        except Exception as e:
+            result["error"] = f"{type(e).__name__}: {str(e)}"
+            result["troubleshooting"] = [
+                "Check network connectivity to api.asgardeo.io",
+                "Verify environment variables are set",
+            ]
+            logger.error(f"M2M connection test FAILED: {result['error']}")
+
+        return result
 
     async def _make_request(
         self,
@@ -196,9 +365,25 @@ class AsgardeoClient:
             "Accept": "application/scim+json",
         }
 
+        logger.debug(f"Making {method} request to {url}")
+        if json:
+            logger.debug(f"Request body: {json}")
+
         response = await self._http_client.request(
             method=method, url=url, headers=headers, json=json, params=params
         )
+
+        # Log response details for debugging
+        if not response.is_success:
+            logger.error(
+                f"Asgardeo API error: {method} {url} returned {response.status_code}"
+            )
+            try:
+                error_body = response.json()
+                logger.error(f"Error response body: {error_body}")
+            except Exception:
+                logger.error(f"Error response text: {response.text}")
+
         response.raise_for_status()
 
         # Handle empty responses (e.g., DELETE operations)
@@ -568,11 +753,14 @@ class AsgardeoClient:
         self, group_id: str, user_id: str, display_name: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Add a user to a group (simplified helper for HR role assignment)
+        Add a user to a group using SCIM 2.0 PATCH operation.
+
+        Uses the recommended Asgardeo SCIM 2.0 Groups API format with
+        explicit "path": "members" in the PATCH operation.
 
         Args:
-            group_id: Group ID to add user to
-            user_id: User ID to add
+            group_id: Group ID (UUID) to add user to
+            user_id: User ID (SCIM UUID from Asgardeo) to add
             display_name: Optional user display name
 
         Returns:
@@ -586,21 +774,39 @@ class AsgardeoClient:
                 display_name="John Doe"
             )
         """
+        logger.info(f"Adding user {user_id} to group {group_id}")
+
         member = {"value": user_id}
         if display_name:
             member["display"] = display_name
 
+        # SCIM 2.0 PATCH format for Asgardeo
+        # See: https://wso2.com/asgardeo/docs/apis/scim2-groups-rest-api/
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-            "Operations": [{"op": "add", "value": {"members": [member]}}],
+            "Operations": [{"op": "add", "path": "members", "value": [member]}],
         }
 
-        return await self._make_request(
-            "PATCH",
-            f"/Groups/{group_id}",
-            scopes=[self.SCOPES["groups"]["update"]],
-            json=body,
-        )
+        try:
+            result = await self._make_request(
+                "PATCH",
+                f"/Groups/{group_id}",
+                scopes=[self.SCOPES["groups"]["update"]],
+                json=body,
+            )
+            logger.info(f"Successfully added user {user_id} to group {group_id}")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Failed to add user {user_id} to group {group_id}: "
+                f"HTTP {e.response.status_code}"
+            )
+            raise
+        except Exception as e:
+            logger.error(
+                f"Unexpected error adding user {user_id} to group {group_id}: {e}"
+            )
+            raise
 
     async def remove_user_from_group(
         self, group_id: str, user_id: str
