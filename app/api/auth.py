@@ -48,6 +48,7 @@ from app.models.users import (
 
 logger = get_logger(__name__)
 
+
 router = APIRouter(
     prefix="/auth",
     tags=["authentication"],
@@ -142,6 +143,8 @@ async def signup(
     existing_user = session.exec(
         select(User).where(User.email == request.email)
     ).first()
+
+    # throw an error if a user already exist
     if existing_user:
         logger.warning(f"Email already exists: {request.email}")
         raise HTTPException(
@@ -159,6 +162,7 @@ async def signup(
         )
         asgardeo_id = asgardeo_data["asgardeo_id"]
         logger.info(f"User created in Asgardeo: {asgardeo_id}")
+
     except Exception as e:
         logger.error(f"Failed to create user in Asgardeo: {e}")
         raise HTTPException(
@@ -168,12 +172,14 @@ async def signup(
 
     # Assign default employee role
     try:
-        await asgardeo_service.assign_role(asgardeo_id, "Employee")
-        logger.info(f"Assigned default role (Employee) to user: {asgardeo_id}")
+        default_role = settings.DEFAULT_ROLE
+        await asgardeo_service.assign_role(asgardeo_id, default_role)
+        logger.info(f"Assigned default role ({default_role}) to user: {asgardeo_id}")
+
     except Exception as e:
         logger.warning(f"Failed to assign default role: {e}")
 
-    # Create local user record
+    # Create local user record for user service
     try:
         db_user = User(
             asgardeo_id=asgardeo_id,
@@ -203,6 +209,7 @@ async def signup(
             event = create_event(EventType.USER_CREATED, event_data)
             await publish_event(KafkaTopics.USER_CREATED, event)
             logger.info(f"Published user created event for: {db_user.id}")
+
         except Exception as e:
             logger.warning(f"Failed to publish user created event: {e}")
 
@@ -233,6 +240,7 @@ async def signup(
             session.commit()
             session.refresh(db_user)
             logger.info(f"Employee created: {db_user.employee_id}")
+
     except Exception as e:
         logger.warning(f"Failed to create employee record: {e}")
 

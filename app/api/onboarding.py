@@ -66,8 +66,8 @@ router = APIRouter(
 
 
 # Constants
-INVITATION_EXPIRY_DAYS = 7
-PROBATION_END_NOTIFICATION_DAYS = 7  # Notify 7 days before probation ends
+INVITATION_EXPIRY_DAYS = settings.INVITATION_EXPIRY_DAYS
+PROBATION_END_NOTIFICATION_DAYS = settings.PROBATION_END_NOTIFICATION_DAYS
 
 
 def validate_password_strength(password: str) -> tuple[bool, str]:
@@ -151,11 +151,10 @@ def calculate_dates(
     - performance_review_date (yearly anniversary)
     - salary_increment_date (yearly anniversary)
     """
-    dates = {}
+    dates = {"performance_review_date": joining_date + relativedelta(years=1),
+             "salary_increment_date": joining_date + relativedelta(years=1)}
 
     # Performance review and salary increment on yearly anniversary
-    dates["performance_review_date"] = joining_date + relativedelta(years=1)
-    dates["salary_increment_date"] = joining_date + relativedelta(years=1)
 
     # Probation end date for permanent employees
     if employment_type == "permanent" and probation_months:

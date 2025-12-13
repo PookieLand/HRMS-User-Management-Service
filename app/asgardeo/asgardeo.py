@@ -755,13 +755,13 @@ class AsgardeoClient:
         """
         Add a user to a group using SCIM 2.0 PATCH operation.
 
-        Uses the recommended Asgardeo SCIM 2.0 Groups API format with
-        explicit "path": "members" in the PATCH operation.
+        Uses the correct Asgardeo SCIM 2.0 Groups API format with
+        nested members structure in the value field.
 
         Args:
             group_id: Group ID (UUID) to add user to
             user_id: User ID (SCIM UUID from Asgardeo) to add
-            display_name: Optional user display name
+            display_name: Optional user display name (email or name)
 
         Returns:
             Updated group resource
@@ -771,7 +771,7 @@ class AsgardeoClient:
             await client.add_user_to_group(
                 group_id=manager_group_id,
                 user_id=new_user_id,
-                display_name="John Doe"
+                display_name="user@example.com"
             )
         """
         logger.info(f"Adding user {user_id} to group {group_id}")
@@ -781,10 +781,11 @@ class AsgardeoClient:
             member["display"] = display_name
 
         # SCIM 2.0 PATCH format for Asgardeo
+        # The value must contain a nested "members" array structure
         # See: https://wso2.com/asgardeo/docs/apis/scim2-groups-rest-api/
         body = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
-            "Operations": [{"op": "add", "path": "members", "value": [member]}],
+            "Operations": [{"op": "add", "value": {"members": [member]}}],
         }
 
         try:

@@ -34,9 +34,14 @@ class Settings(BaseSettings):
     CORS_ALLOW_HEADERS: List[str] = ["*"]
 
     # Asgardeo OAuth2 Settings
-    ASGARDEO_ORG: str = ""  # REQUIRED: Must be set in .env file
-    ASGARDEO_CLIENT_ID: str = ""  # REQUIRED: Must be set in .env file
-    ASGARDEO_CLIENT_SECRET: str = ""  # REQUIRED: Must be set in .env file
+    # ASGARDEO_ORG: str = ""  # REQUIRED: Must be set in .env file
+    # ASGARDEO_CLIENT_ID: str = ""  # REQUIRED: Must be set in .env file
+    # ASGARDEO_CLIENT_SECRET: str = ""  # REQUIRED: Must be set in .env file
+
+    ASGARDEO_ORG: str = "pookieland"
+    ASGARDEO_CLIENT_ID: str = "O1swhn0zfcjJGAfxIKIfuAyoApAa"
+    ASGARDEO_CLIENT_SECRET: str = "5MurGc7axd60Gg5Y0QrnrlLmlsu5yvbJhqtbl0aN_W8a"
+
     JWT_AUDIENCE: str | None = None  # Optional: Set in .env if needed
     JWT_ISSUER: str | None = None  # Optional: Set in .env if needed
 
@@ -211,6 +216,11 @@ class Settings(BaseSettings):
         if self.REDIS_PASSWORD:
             return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
+
+    # Onboarding constants
+    INVITATION_EXPIRY_DAYS: int = 7
+    # Notify 7 days before probation ends
+    PROBATION_END_NOTIFICATION_DAYS: int = 7
 
     class Config:
         env_file = ".env"
