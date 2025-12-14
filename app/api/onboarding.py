@@ -122,7 +122,7 @@ def can_onboard_role(actor_role: str, target_role: str) -> tuple[bool, str]:
         return False, "Only HR Admin and HR Manager can initiate onboarding"
 
     # Validate target role
-    valid_target_roles = ["HR_Manager", "manager", "employee"]
+    valid_target_roles = ["HR_Manager", "manager", "employee", "Manager", "Employee"]
     if target_role not in valid_target_roles:
         return False, f"Invalid role. Must be one of: {', '.join(valid_target_roles)}"
 
@@ -151,8 +151,10 @@ def calculate_dates(
     - performance_review_date (yearly anniversary)
     - salary_increment_date (yearly anniversary)
     """
-    dates = {"performance_review_date": joining_date + relativedelta(years=1),
-             "salary_increment_date": joining_date + relativedelta(years=1)}
+    dates = {
+        "performance_review_date": joining_date + relativedelta(years=1),
+        "salary_increment_date": joining_date + relativedelta(years=1),
+    }
 
     # Performance review and salary increment on yearly anniversary
 
@@ -264,7 +266,7 @@ async def initiate_onboarding(
     )
 
     # Calculate expiry time
-    expires_at = datetime.utcnow() + timedelta(days=INVITATION_EXPIRY_DAYS)
+    expires_at = datetime.now() + timedelta(days=INVITATION_EXPIRY_DAYS)
 
     # Get initiator's user ID from database
     initiator = session.exec(
@@ -297,7 +299,7 @@ async def initiate_onboarding(
         notes=request.notes,
         status=OnboardingStatus.INITIATED.value,
         initiated_by=initiator_id,
-        initiated_at=datetime.utcnow(),
+        initiated_at=datetime.now(),
         expires_at=expires_at,
     )
 

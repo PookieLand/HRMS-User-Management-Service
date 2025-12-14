@@ -90,10 +90,10 @@ class EmployeeServiceClient:
                     return data
                 elif response.status_code == 401:
                     logger.error(
-                        f"❌ 401 Unauthorized from Employee Service\n"
-                        f"The employee endpoint requires authentication.\n"
-                        f"Fix: Make employee creation endpoint allow internal service calls\n"
-                        f"     OR send a service token with the request"
+                        "❌ 401 Unauthorized from Employee Service\n"
+                        "The employee endpoint requires authentication.\n"
+                        "Fix: Make employee creation endpoint allow internal service calls\n"
+                        "     OR send a service token with the request"
                     )
                     return None
                 elif response.status_code == 307:
