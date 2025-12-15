@@ -46,13 +46,16 @@ RUN find /app/.venv/lib/python3.13/site-packages -type f \( -name "*.md" -o -nam
 RUN rm -rf /app/.venv/lib/python3.13/site-packages/pip /app/.venv/lib/python3.13/site-packages/setuptools /app/.venv/lib/python3.13/site-packages/wheel 2>/dev/null || true
 
 # Runtime stage
-FROM python:3.13-alpine3.22
+FROM python:3.13-slim
 
 # Install only runtime dependencies (not build tools)
-RUN apk add --no-cache \
-    mariadb-connector-c \
-    libstdc++ \
-    ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    mariadb-client \
+    libmariadb3 \
+    libstdc++6 \
+    ca-certificates \
+    librdkafka1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user for security
 RUN addgroup -g 10001 appgroup && \
