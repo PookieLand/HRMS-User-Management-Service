@@ -31,10 +31,7 @@ ASGARDEO_GROUP_TO_ROLE = {
     "HR-Manager": "HR_Manager",
     "HRManagers": "HR_Manager",
     "HRManager": "HR_Manager",
-    # Manager variants
-    "Team_Managers": "manager",
-    "Team-Managers": "manager",
-    "TeamManagers": "manager",
+    # Manager variants (use 'Managers' as canonical display name)
     "Managers": "manager",
     "Manager": "manager",
     "manager": "manager",

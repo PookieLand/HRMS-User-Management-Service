@@ -96,6 +96,19 @@ async def lifespan(_: FastAPI):
     await daily_scheduler.start()
     logger.info("Daily scheduler started")
 
+    # Preload Asgardeo role group IDs into cache (non-blocking)
+    try:
+        from app.core.asgardeo import get_asgardeo_service
+
+        asgardeo_service = get_asgardeo_service()
+        preloaded = await asgardeo_service.preload_role_group_ids()
+        if preloaded:
+            logger.info(f"Preloaded Asgardeo role group IDs: {', '.join(preloaded.keys())}")
+        else:
+            logger.info("No Asgardeo role groups preloaded (check permissions or environment variables)")
+    except Exception as e:
+        logger.warning(f"Failed to preload Asgardeo groups during startup: {e}")
+
     logger.info("Application startup complete")
 
     yield

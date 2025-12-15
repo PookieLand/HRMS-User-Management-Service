@@ -192,11 +192,12 @@ class Settings(BaseSettings):
 
     # Asgardeo Group Mapping
     # Using underscore format to match actual Asgardeo group names
+    # NOTE: Updated to use current group names in Asgardeo: 'Managers' (not 'Team_Managers')
     ASGARDEO_GROUP_MAPPING: dict = {
         "HR_Admin": "HR_Administrators",
         "HR_Manager": "HR_Managers",
-        "Manager": "Team_Managers",
-        "manager": "Team_Managers",
+        "Manager": "Managers",
+        "manager": "Managers",
         "Employee": "Employees",
         "employee": "Employees",
     }

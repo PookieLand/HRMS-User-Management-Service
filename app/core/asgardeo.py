@@ -60,6 +60,90 @@ class AsgardeoService:
         """
         self.client = client
 
+    async def preload_role_group_ids(self) -> dict[str, str]:
+        """Preload and cache role -> group_id mappings for configured roles.
+
+        This attempts to resolve each role's Asgardeo group by name and caches
+        the group resource in the client. If group lookup is forbidden (403)
+        or group not found, it will attempt to use environment-configured
+        fallback group IDs (e.g., ASGARDEO_GROUP_ID_EMPLOYEE).
+
+        Returns:
+            Mapping of role_name -> resolved group_id (for those found)
+        """
+        found: dict[str, str] = {}
+
+        for role_name, group_name in settings.ASGARDEO_GROUP_MAPPING.items():
+            # First check for explicit fallback environment var
+            env_var_name = f"ASGARDEO_GROUP_ID_{role_name.upper()}"
+            env_group_id = getattr(settings, env_var_name, None)
+            if env_group_id:
+                logger.info(
+                    f"Using configured group ID from {env_var_name} for role {role_name}: {env_group_id[:8]}..."
+                )
+                # Cache in client as a minimal resource
+                self.client.cache_group({"id": env_group_id, "displayName": group_name})
+                found[role_name] = env_group_id
+                continue
+
+            # Try to resolve via Asgardeo API
+            try:
+                group = await self.client.find_group_by_name(group_name)
+                if group and group.get("id"):
+                    self.client.cache_group(group)
+                    found[role_name] = group.get("id")
+                    logger.info(f"Preloaded group '{group_name}' for role {role_name}: {found[role_name][:8]}...")
+                else:
+                    logger.warning(f"Group '{group_name}' not found in Asgardeo for role {role_name}")
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403:
+                    logger.warning(
+                        f"Permission denied when preloading groups (403). Cannot read groups for role {role_name}"
+                    )
+                    logger.info(
+                        "Set environment fallback variables ASGARDEO_GROUP_ID_<ROLE> or grant 'View Groups' permission to M2M app."
+                    )
+                else:
+                    logger.error(f"Failed to preload group '{group_name}': HTTP {e.response.status_code}")
+
+        return found
+
+    async def get_group_id_for_role(self, role_name: str) -> str | None:
+        """Return the Asgardeo group ID for a given role name, using cache and fallbacks."""
+        group_name = settings.ASGARDEO_GROUP_MAPPING.get(role_name)
+        if not group_name:
+            logger.warning(f"No group mapping found for role: {role_name}")
+            return None
+
+        # Check client cache
+        cached = self.client.get_cached_group_id(group_name)
+        if cached:
+            return cached
+
+        # Try environment fallback if present
+        env_var_name = f"ASGARDEO_GROUP_ID_{role_name.upper()}"
+        env_group_id = getattr(settings, env_var_name, None)
+        if env_group_id:
+            # Cache and return
+            self.client.cache_group({"id": env_group_id, "displayName": group_name})
+            return env_group_id
+
+        # Try to find via API (may raise HTTPStatusError)
+        try:
+            group = await self.client.find_group_by_name(group_name)
+            if group and group.get("id"):
+                return group.get("id")
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                logger.warning(
+                    f"Permission denied when listing groups (403). Consider configuring {env_var_name} or granting group view permission."
+                )
+                return None
+            raise
+
+        logger.warning(f"Could not determine group ID for '{group_name}' (role {role_name})")
+        return None
+
     async def create_user(
         self,
         email: str,
@@ -261,82 +345,25 @@ class AsgardeoService:
 
     async def assign_role(self, asgardeo_id: str, role_name: str) -> None:
         """
-        Assign role to user via group membership.
+        Assign role to user via group membership using cached group IDs when available.
 
-        Maps application roles to Asgardeo groups and adds user to the group.
-        If group lookup fails due to permissions (403), uses environment-configured
-        group IDs as fallback.
-
-        Args:
-            asgardeo_id: User ID in Asgardeo
-            role_name: Role name (HR_Admin, HR_Manager, Manager, Employee)
-
-        Raises:
-            Exception: If role assignment fails
+        Non-blocking: failures are logged but do not cause signup/onboarding to fail.
         """
         try:
-            # Map application roles to Asgardeo groups
-            # Using underscore format to match actual Asgardeo group names
-            role_group_mapping = {
-                "HR_Admin": "HR_Administrators",
-                "HR_Manager": "HR_Managers",
-                "Manager": "Team_Managers",
-                "manager": "Team_Managers",
-                "Employee": "Employees",
-                "employee": "Employees",
-            }
-
-            group_name = role_group_mapping.get(role_name)
+            group_name = settings.ASGARDEO_GROUP_MAPPING.get(role_name)
             if not group_name:
                 logger.warning(f"No group mapping found for role: {role_name}")
                 return
 
-            group_id = None
-
-            # Try to find group by name
-            try:
-                group = await self.client.find_group_by_name(group_name)
-                if group:
-                    group_id = group.get("id")
-                else:
-                    logger.error(f"Group not found in Asgardeo: {group_name}")
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 403:
-                    # Permission denied - fallback to environment-configured group IDs
-                    logger.warning(
-                        f"Permission denied when listing groups (403). "
-                        f"Attempting fallback with environment-configured group IDs."
-                    )
-                    logger.info(
-                        "To enable group lookup, grant 'View Groups' permission to M2M app in Asgardeo Console."
-                    )
-
-                    # Try to get group ID from environment variables
-                    env_var_name = f"ASGARDEO_GROUP_ID_{role_name.upper()}"
-                    group_id = getattr(settings, env_var_name, None)
-
-                    if not group_id:
-                        logger.error(
-                            f"Group lookup failed and no fallback group ID configured. "
-                            f"Set environment variable {env_var_name} or grant group read permissions to M2M app."
-                        )
-                        # Don't raise - make it non-blocking
-                        return
-                    else:
-                        logger.info(
-                            f"Using configured group ID from {env_var_name}: {group_id[:8]}..."
-                        )
-                else:
-                    raise
-
+            # Try to determine group id (cache, env fallback, or API lookup)
+            group_id = await self.get_group_id_for_role(role_name)
             if not group_id:
                 logger.warning(
-                    f"Could not determine group ID for '{group_name}'. "
-                    f"Please create group in Asgardeo Console or configure group ID in environment."
+                    f"Could not determine group ID for role '{role_name}' (group: {group_name}). Role assignment skipped."
                 )
                 return
 
-            # Add user to group - get user email for display name
+            # Add user to group - get user email for display name if available
             try:
                 user_data = await self.client.get_user(asgardeo_id)
                 emails = user_data.get("emails", [])
@@ -353,9 +380,8 @@ class AsgardeoService:
 
         except httpx.HTTPStatusError as e:
             logger.error(
-                f"Failed to assign role '{role_name}' to user {asgardeo_id}: {e}"
+                f"Failed to assign role '{role_name}' to user {asgardeo_id}: HTTP {e.response.status_code} - {e.response.text}"
             )
-            # Make it non-blocking - log warning instead of raising
             logger.warning(
                 f"Role assignment failed (non-blocking). User created but not assigned to group."
             )
@@ -363,7 +389,6 @@ class AsgardeoService:
             logger.error(
                 f"Failed to assign role '{role_name}' to user {asgardeo_id}: {e}"
             )
-            # Make it non-blocking for onboarding flow
             logger.warning(f"Failed to assign role in Asgardeo (non-blocking): {e}")
 
     async def remove_role(self, asgardeo_id: str, role_name: str) -> None:
@@ -483,3 +508,8 @@ asgardeo_client = create_asgardeo_client()
 
 # Global service instance (wraps client with business logic)
 asgardeo_service = AsgardeoService(asgardeo_client)
+
+
+def get_asgardeo_service() -> AsgardeoService:
+    """Return the global AsgardeoService instance"""
+    return asgardeo_service

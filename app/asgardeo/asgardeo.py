@@ -95,6 +95,9 @@ class AsgardeoClient:
         self._token: Optional[TokenResponse] = None
         self._http_client = httpx.AsyncClient(timeout=30.0)
 
+        # In-memory cache for groups: displayName -> group resource
+        self._group_cache: dict[str, dict] = {}
+
         # Build base URLs
         self.token_url = f"{config.base_url}/t/{config.organization}/oauth2/token"
         self.scim_base_url = f"{config.base_url}/t/{config.organization}/scim2"
@@ -118,6 +121,68 @@ class AsgardeoClient:
                 "Set ASGARDEO_CLIENT_ID and ASGARDEO_CLIENT_SECRET in environment."
             )
         logger.info("=" * 60)
+
+    # ---------------- Group cache helpers ----------------
+    def cache_group(self, group: dict) -> None:
+        """Store group resource in local cache keyed by its displayName"""
+        name = group.get("displayName")
+        if name:
+            self._group_cache[name] = group
+
+    async def preload_groups(self, group_names: list[str]) -> dict[str, str]:
+        """Attempt to fetch and cache groups for the provided display names.
+
+        Returns a mapping of displayName -> group_id for groups found.
+        """
+        found: dict[str, str] = {}
+        for name in group_names:
+            try:
+                group = await self.find_group_by_name(name)
+                if group and group.get("id"):
+                    self.cache_group(group)
+                    found[name] = group.get("id")
+            except httpx.HTTPStatusError as e:
+                logger.warning(f"Failed to preload group '{name}': HTTP {e.response.status_code}")
+        return found
+
+    def get_cached_group_id(self, display_name: str) -> str | None:
+        """Return cached group id for display_name if present"""
+        grp = self._group_cache.get(display_name)
+        if grp:
+            return grp.get("id")
+        return None
+
+    # ----------------------------------------------------
+
+    async def find_group_by_name(self, group_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Find a group by its display name (helper for HR role management)
+
+        Args:
+            group_name: Group display name to search for
+
+        Returns:
+            Group resource if found, None otherwise
+
+        Example:
+            # Find HR Managers group
+            group = await client.find_group_by_name("HR-Managers")
+            if group:
+                group_id = group['id']
+        """
+        # Check local cache first
+        cached_id = self.get_cached_group_id(group_name)
+        if cached_id:
+            return self._group_cache.get(group_name)
+
+        groups = await self.list_groups(filter=f'displayName eq "{group_name}"')
+
+        if groups.get("totalResults", 0) > 0:
+            group = groups["Resources"][0]
+            # Cache the group for future lookups
+            self.cache_group(group)
+            return group
+        return None
 
     async def close(self):
         """Close the HTTP client"""
@@ -800,7 +865,7 @@ class AsgardeoClient:
         except httpx.HTTPStatusError as e:
             logger.error(
                 f"Failed to add user {user_id} to group {group_id}: "
-                f"HTTP {e.response.status_code}"
+                f"HTTP {e.response.status_code} - {e.response.text}"
             )
             raise
         except Exception as e:

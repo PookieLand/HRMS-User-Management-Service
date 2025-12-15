@@ -276,6 +276,37 @@ async def signup(
     )
 
 
+@router.get("/asgardeo/groups", tags=["asgardeo"])
+async def get_asgardeo_group_cache(current_user: Annotated[TokenData, Depends(get_current_active_user)]):
+    """Return the resolved group IDs for configured roles (debugging endpoint).
+
+    Requires an authenticated user. Non-blocking and intended for debugging.
+    """
+    from app.core.asgardeo import get_asgardeo_service
+
+    svc = get_asgardeo_service()
+    result: dict[str, dict] = {}
+
+    for role in settings.ASGARDEO_GROUP_MAPPING.keys():
+        # Try cache first
+        group_name = settings.ASGARDEO_GROUP_MAPPING.get(role)
+        cached = svc.client.get_cached_group_id(group_name)
+        source = "cache" if cached else None
+
+        if not cached:
+            # Check env fallback
+            env_var_name = f"ASGARDEO_GROUP_ID_{role.upper()}"
+            env_val = getattr(settings, env_var_name, None)
+            if env_val:
+                cached = env_val
+                source = "env"
+
+        # Do not attempt network calls here; present current state
+        result[role] = {"group_name": group_name, "group_id": cached, "source": source}
+
+    return {"asgardeo_group_cache": result}
+
+
 @router.get("/users/me", response_model=UserProfileResponse)
 async def get_profile(
     current_user: Annotated[TokenData, Depends(get_current_active_user)],
@@ -579,7 +610,7 @@ async def debug_token(
             "expected_groups": {
                 "HR_Administrators": "HR_Admin",
                 "HR_Managers": "HR_Manager",
-                "Team_Managers": "manager",
+                "Managers": "manager",
                 "Employees": "employee",
             },
         },
