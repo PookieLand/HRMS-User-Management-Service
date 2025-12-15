@@ -1,4 +1,4 @@
-FROM python:3.13-alpine3.22 AS builder
+FROM python:3.13-slim AS builder
 
 # Install system dependencies for mysqlclient and confluent-kafka (librdkafka v2.12.1+)
 RUN apt-get update && apt-get install -y --no-install-recommends \

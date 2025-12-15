@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     ASGARDEO_CLIENT_ID: str = "O1swhn0zfcjJGAfxIKIfuAyoApAa"
     ASGARDEO_CLIENT_SECRET: str = "5MurGc7axd60Gg5Y0QrnrlLmlsu5yvbJhqtbl0aN_W8a"
 
+    # Asgardeo Group IDs (Optional fallback when group read permissions are not available)
+    # These are used when M2M app doesn't have permission to list/read groups
+    # Find group IDs in Asgardeo Console under User Management > Groups
+    ASGARDEO_GROUP_ID_HR_ADMIN: str | None = None
+    ASGARDEO_GROUP_ID_HR_MANAGER: str | None = None
+    ASGARDEO_GROUP_ID_MANAGER: str | None = None
+    ASGARDEO_GROUP_ID_EMPLOYEE: str | None = None
+
     JWT_AUDIENCE: str | None = None  # Optional: Set in .env if needed
     JWT_ISSUER: str | None = None  # Optional: Set in .env if needed
 

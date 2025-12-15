@@ -271,23 +271,21 @@ class EmployeeServiceClient:
                 if response.status_code in [200, 201]:
                     data = response.json()
                     logger.info(
-                        f"✅ Employee created from onboarding: {data.get('id')} "
+                        f"Employee created from onboarding: {data.get('id')} "
                         f"for user {user_id} ({email})"
                     )
                     return data
                 elif response.status_code == 400:
                     logger.warning(
-                        f"⚠️ Bad request creating employee: {response.text[:500]}"
+                        f"Bad request creating employee: {response.text[:500]}"
                     )
                     return None
                 elif response.status_code == 401:
-                    logger.error(
-                        f"❌ 401 Unauthorized from Employee Service\nURL: {url}"
-                    )
+                    logger.error(f"401 Unauthorized from Employee Service\nURL: {url}")
                     return None
                 else:
                     logger.error(
-                        f"❌ Failed to create employee from onboarding: HTTP {response.status_code}\n"
+                        f"Failed to create employee from onboarding: HTTP {response.status_code}\n"
                         f"URL: {url}\n"
                         f"Response: {response.text[:500]}"
                     )
@@ -295,13 +293,13 @@ class EmployeeServiceClient:
 
         except httpx.RequestError as e:
             logger.error(
-                f"❌ Network error calling Employee Service at {url}\n"
+                f"Network error calling Employee Service at {url}\n"
                 f"Error: {e}\n"
                 f"Check if employee-service is running"
             )
             return None
         except Exception as e:
-            logger.error(f"❌ Unexpected error creating employee from onboarding: {e}")
+            logger.error(f"Unexpected error creating employee from onboarding: {e}")
             return None
 
     async def update_employee_status(self, employee_id: int, status: str) -> bool:
