@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     KAFKA_BOOTSTRAP_SERVERS: str = "localhost:9092"
     KAFKA_ENABLED: bool = True
 
+    # Frontend URL for invitation links
+    FRONTEND_URL: str = "http://localhost:3000"
+
     # CORS Settings
     CORS_ORIGINS: str = "https://localhost,http://localhost:3000"
     CORS_ALLOW_CREDENTIALS: bool = True

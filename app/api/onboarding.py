@@ -309,8 +309,11 @@ async def initiate_onboarding(
     logger.info(f"Created onboarding invitation: {invitation.id} for {request.email}")
 
     # Build invitation link
-    # In production, this would be the frontend URL
-    invitation_link = f"http://localhost:3000/signup?token={invitation_token}"
+    # Use FRONTEND_URL from settings or default to localhost
+    from app.core.config import settings
+
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
+    invitation_link = f"{frontend_url}/employee-signup?token={invitation_token}"
 
     # Publish onboarding initiated event
     try:
