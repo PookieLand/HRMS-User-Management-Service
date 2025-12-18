@@ -173,8 +173,11 @@ async def signup(
     # Assign default employee role
     try:
         default_role = settings.DEFAULT_ROLE
-        await asgardeo_service.assign_role(asgardeo_id, default_role)
-        logger.info(f"Assigned default role ({default_role}) to user: {asgardeo_id}")
+        assigned = await asgardeo_service.assign_role(asgardeo_id, default_role)
+        if assigned:
+            logger.info(f"Assigned default role ({default_role}) to user: {asgardeo_id}")
+        else:
+            logger.warning(f"Default role ({default_role}) assignment skipped/failed for user: {asgardeo_id}")
 
     except Exception as e:
         logger.warning(f"Failed to assign default role: {e}")

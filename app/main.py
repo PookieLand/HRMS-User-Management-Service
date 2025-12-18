@@ -103,9 +103,13 @@ async def lifespan(_: FastAPI):
         asgardeo_service = get_asgardeo_service()
         preloaded = await asgardeo_service.preload_role_group_ids()
         if preloaded:
-            logger.info(f"Preloaded Asgardeo role group IDs: {', '.join(preloaded.keys())}")
+            logger.info(
+                f"Preloaded Asgardeo role group IDs: {', '.join(preloaded.keys())}"
+            )
         else:
-            logger.info("No Asgardeo role groups preloaded (check permissions or environment variables)")
+            logger.info(
+                "No Asgardeo role groups preloaded (check permissions or environment variables)"
+            )
     except Exception as e:
         logger.warning(f"Failed to preload Asgardeo groups during startup: {e}")
 
@@ -150,9 +154,9 @@ app.add_middleware(
 
 
 # Include routers
-app.include_router(auth_router, prefix="/api/v1")
-app.include_router(users_router, prefix="/api/v1")
-app.include_router(onboarding_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1/users")
+app.include_router(users_router, prefix="/api/v1/users")
+app.include_router(onboarding_router, prefix="/api/v1/users")
 
 
 # Health check endpoint

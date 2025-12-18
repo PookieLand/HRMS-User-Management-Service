@@ -314,7 +314,10 @@ class AsgardeoClient:
 
     async def get_access_token(self, scopes: Optional[List[str]] = None) -> str:
         """
-        Get a valid access token, refreshing if necessary
+        Get a valid access token, refreshing if necessary.
+
+        This method ensures the cached token has the requested scopes; if not,
+        it will fetch a new token that includes them.
 
         Args:
             scopes: Optional list of scopes. If None, requests all user and group management scopes
@@ -328,16 +331,34 @@ class AsgardeoClient:
                 self.SCOPES["groups"].values()
             )
 
-        # Check if we need to fetch a new token
+        requested_scopes_set = set(scopes)
+
+        # If no token cached, fetch one
         if self._token is None:
             logger.info("No cached token, fetching new M2M access token...")
             self._token = await self._fetch_access_token(scopes)
-        elif self._token.needs_refresh:
+            return self._token.access_token
+
+        # If token nearing expiry, refresh it
+        if self._token.needs_refresh:
             logger.info("Cached token needs refresh, fetching new M2M access token...")
             self._token = await self._fetch_access_token(scopes)
-        else:
-            logger.debug("Using cached M2M access token")
+            return self._token.access_token
 
+        # Ensure existing token contains requested scopes
+        token_scope_str = (self._token.scope or "")
+        token_scope_set = set(token_scope_str.split()) if token_scope_str else set()
+
+        if not requested_scopes_set.issubset(token_scope_set):
+            logger.info(
+                "Cached token does not contain requested scopes. Fetching new token with requested scopes..."
+            )
+            logger.debug(f"Requested scopes: {scopes}")
+            logger.debug(f"Cached token scopes: {token_scope_set}")
+            self._token = await self._fetch_access_token(scopes)
+            return self._token.access_token
+
+        logger.debug("Using cached M2M access token with sufficient scopes")
         return self._token.access_token
 
     async def test_m2m_connection(self) -> Dict[str, Any]:
@@ -409,7 +430,8 @@ class AsgardeoClient:
         params: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
-        Make authenticated request to Asgardeo API
+        Make authenticated request to Asgardeo API with a single automatic retry
+        if a 403 is returned (attempts to refresh token with requested scopes).
 
         Args:
             method: HTTP method (GET, POST, PUT, PATCH, DELETE)
@@ -421,41 +443,99 @@ class AsgardeoClient:
         Returns:
             Response JSON as dictionary
         """
-        token = await self.get_access_token(scopes)
         url = f"{self.scim_base_url}{endpoint}"
 
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/scim+json",
-            "Accept": "application/scim+json",
-        }
-
-        logger.debug(f"Making {method} request to {url}")
-        if json:
-            logger.debug(f"Request body: {json}")
-
-        response = await self._http_client.request(
-            method=method, url=url, headers=headers, json=json, params=params
-        )
-
-        # Log response details for debugging
-        if not response.is_success:
-            logger.error(
-                f"Asgardeo API error: {method} {url} returned {response.status_code}"
-            )
+        # We'll try up to 2 attempts: initial attempt (use cached token if valid),
+        # and one retry that forces fetching a fresh token with requested scopes.
+        last_error = None
+        for attempt in (1, 2):
             try:
-                error_body = response.json()
-                logger.error(f"Error response body: {error_body}")
+                # On retry, force fetch a fresh token with requested scopes
+                if attempt == 2:
+                    logger.info(
+                        "Retrying request by forcing a fresh M2M token with requested scopes"
+                    )
+                    self._token = await self._fetch_access_token(scopes or [])
+
+                token = await self.get_access_token(scopes)
+
+                # Log the token scope information for debugging (no raw token unless debugging env)
+                token_scopes = self._token.scope if self._token else None
+                token_preview = (
+                    f"{self._token.access_token[:20]}...{self._token.access_token[-10:]}"
+                    if self._token and self._token.access_token
+                    else None
+                )
+                logger.debug(f"Using access token (preview)={token_preview}, scopes={token_scopes}")
+
+                headers = {
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/scim+json",
+                    "Accept": "application/scim+json",
+                }
+
+                logger.debug(f"Making {method} request to {url} (attempt {attempt})")
+                if json:
+                    logger.debug(f"Request body: {json}")
+
+                response = await self._http_client.request(
+                    method=method, url=url, headers=headers, json=json, params=params
+                )
+
+                # Log response details for debugging
+                if not response.is_success:
+                    logger.error(
+                        f"Asgardeo API error: {method} {url} returned {response.status_code}"
+                    )
+                    try:
+                        error_body = response.json()
+                        logger.error(f"Error response body: {error_body}")
+                    except Exception:
+                        logger.error(f"Error response text: {response.text}")
+
+                # If we receive a 403 on first attempt, retry once after forcing new token
+                if response.status_code == 403 and attempt == 1:
+                    logger.warning(
+                        "Received 403 from Asgardeo. Will attempt to refetch token and retry once."
+                    )
+                    last_error = response
+                    continue
+
+                response.raise_for_status()
+
+                # Handle empty responses (e.g., DELETE operations)
+                if response.status_code == 204 or not response.content:
+                    return {"status": "success", "statusCode": response.status_code}
+
+                return response.json()
+
+            except httpx.HTTPStatusError as e:
+                # If it's a 403 and we haven't retried yet, loop to retry
+                if e.response.status_code == 403 and attempt == 1:
+                    logger.warning("HTTP 403 encountered, retrying with fresh token")
+                    last_error = e.response
+                    continue
+                logger.error(f"HTTP Error during request to {url}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error during request to {url}: {type(e).__name__}: {e}")
+                raise
+
+        # If we exit loop without returning, raise the last captured error for clarity
+        if last_error is not None:
+            try:
+                err_body = last_error.json()
             except Exception:
-                logger.error(f"Error response text: {response.text}")
+                err_body = last_error.text
+            logger.error(f"Final attempt failed with status {last_error.status_code}: {err_body}")
+            raise httpx.HTTPStatusError(
+                message=f"Asgardeo API error: {last_error.status_code}",
+                request=httpx.Request(method, url),
+                response=last_error,
+            )
 
-        response.raise_for_status()
-
-        # Handle empty responses (e.g., DELETE operations)
-        if response.status_code == 204 or not response.content:
-            return {"status": "success", "statusCode": response.status_code}
-
-        return response.json()
+        # Shouldn't reach here
+        raise RuntimeError("Unexpected failure in _make_request")
 
     # ==================== User Management ====================
 
@@ -841,31 +921,113 @@ class AsgardeoClient:
         """
         logger.info(f"Adding user {user_id} to group {group_id}")
 
+        # Build member object and ensure 'display' is present and non-empty because
+        # Asgardeo may reject member objects with empty display attributes.
         member = {"value": user_id}
-        if display_name:
-            member["display"] = display_name
 
-        # SCIM 2.0 PATCH format for Asgardeo
-        # The value must contain a nested "members" array structure
-        # See: https://wso2.com/asgardeo/docs/apis/scim2-groups-rest-api/
-        body = {
+        # Prefer provided display_name; otherwise fetch from Asgardeo user resource
+        final_display = display_name
+        if not final_display:
+            try:
+                user_res = await self.get_user(user_id)
+                # Prefer primary email, then userName
+                emails = user_res.get("emails", []) if user_res else []
+                if emails:
+                    final_display = emails[0].get("value")
+                else:
+                    final_display = user_res.get("userName") if user_res else None
+            except Exception:
+                final_display = None
+
+        # If still missing, fall back to user_id string so display is never empty
+        if final_display:
+            member["display"] = final_display
+        else:
+            member["display"] = str(user_id)
+
+        # Primary working payload suggested by your example: nested 'value': {'members': [...]}
+        body_primary = {
             "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
             "Operations": [{"op": "add", "value": {"members": [member]}}],
         }
 
+        # Fallback shape: explicit path 'members' with value as list
+        body_fallback = {
+            "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+            "Operations": [{"op": "add", "path": "members", "value": [member]}],
+        }
+
+        # Try primary payload first (matches your working example). If Asgardeo returns
+        # HTTP 400 invalidSyntax, retry once using the fallback format and log both attempts.
         try:
+            logger.debug(f"Sending primary PATCH payload for group assignment: {body_primary}")
             result = await self._make_request(
                 "PATCH",
                 f"/Groups/{group_id}",
                 scopes=[self.SCOPES["groups"]["update"]],
-                json=body,
+                json=body_primary,
             )
-            logger.info(f"Successfully added user {user_id} to group {group_id}")
+            logger.info(f"Successfully added user {user_id} to group {group_id} (primary payload)")
             return result
         except httpx.HTTPStatusError as e:
+            status = e.response.status_code if e.response is not None else None
+            text = e.response.text if e.response is not None else ""
+            # Retry on 400 invalidSyntax specifically
+            if status == 400 and "invalidSyntax" in text:
+                logger.warning(
+                    "Primary payload produced 400 invalidSyntax; retrying with fallback payload (path=members)"
+                )
+                try:
+                    logger.debug(f"Sending fallback PATCH payload for group assignment: {body_fallback}")
+                    result = await self._make_request(
+                        "PATCH",
+                        f"/Groups/{group_id}",
+                        scopes=[self.SCOPES["groups"]["update"]],
+                        json=body_fallback,
+                    )
+                    logger.info(f"Successfully added user {user_id} to group {group_id} (fallback payload)")
+                    return result
+                except Exception as e2:
+                    logger.error(
+                        f"Fallback attempt failed adding user {user_id} to group {group_id}: {e2}"
+                    )
+                    # Try PUT-based fallback: fetch group, append member, then PUT the group resource
+                    try:
+                        logger.info(
+                            "Attempting PUT fallback: fetch group resource, append member, and update group"
+                        )
+                        group_resource = await self.get_group(group_id)
+                        members = group_resource.get("members", []) or []
+
+                        # Check if member already present
+                        if any(m.get("value") == user_id for m in members):
+                            logger.info(
+                                f"User {user_id} already a member of group {group_id} (PUT fallback)"
+                            )
+                            return group_resource
+
+                        members.append(member)
+                        group_resource["members"] = members
+
+                        logger.debug(f"PUT payload for group update: {group_resource}")
+                        result = await self._make_request(
+                            "PUT",
+                            f"/Groups/{group_id}",
+                            scopes=[self.SCOPES["groups"]["update"]],
+                            json=group_resource,
+                        )
+                        logger.info(
+                            f"Successfully added user {user_id} to group {group_id} via PUT fallback"
+                        )
+                        return result
+                    except Exception as e3:
+                        logger.error(
+                            f"PUT fallback failed for adding user {user_id} to group {group_id}: {e3}"
+                        )
+                        raise
+            # Not a retryable syntax error — bubble up
             logger.error(
-                f"Failed to add user {user_id} to group {group_id}: "
-                f"HTTP {e.response.status_code} - {e.response.text}"
+                f"Failed to add user {user_id} to group {group_id}: HTTP {status} - {text}"
             )
             raise
         except Exception as e:

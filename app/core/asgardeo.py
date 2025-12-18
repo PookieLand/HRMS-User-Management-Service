@@ -343,17 +343,18 @@ class AsgardeoService:
             logger.error(f"Failed to enable user in Asgardeo ({asgardeo_id}): {e}")
             raise
 
-    async def assign_role(self, asgardeo_id: str, role_name: str) -> None:
+    async def assign_role(self, asgardeo_id: str, role_name: str) -> bool:
         """
         Assign role to user via group membership using cached group IDs when available.
 
-        Non-blocking: failures are logged but do not cause signup/onboarding to fail.
+        Returns:
+            True if assignment succeeded, False if skipped or failed (non-blocking).
         """
         try:
             group_name = settings.ASGARDEO_GROUP_MAPPING.get(role_name)
             if not group_name:
                 logger.warning(f"No group mapping found for role: {role_name}")
-                return
+                return False
 
             # Try to determine group id (cache, env fallback, or API lookup)
             group_id = await self.get_group_id_for_role(role_name)
@@ -361,7 +362,7 @@ class AsgardeoService:
                 logger.warning(
                     f"Could not determine group ID for role '{role_name}' (group: {group_name}). Role assignment skipped."
                 )
-                return
+                return False
 
             # Add user to group - get user email for display name if available
             try:
@@ -377,6 +378,7 @@ class AsgardeoService:
             logger.info(
                 f"Assigned role '{role_name}' (group: {group_name}) to user {asgardeo_id}"
             )
+            return True
 
         except httpx.HTTPStatusError as e:
             logger.error(
@@ -385,11 +387,13 @@ class AsgardeoService:
             logger.warning(
                 f"Role assignment failed (non-blocking). User created but not assigned to group."
             )
+            return False
         except Exception as e:
             logger.error(
                 f"Failed to assign role '{role_name}' to user {asgardeo_id}: {e}"
             )
             logger.warning(f"Failed to assign role in Asgardeo (non-blocking): {e}")
+            return False
 
     async def remove_role(self, asgardeo_id: str, role_name: str) -> None:
         """

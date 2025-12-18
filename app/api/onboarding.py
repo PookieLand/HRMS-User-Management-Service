@@ -557,8 +557,11 @@ async def signup_step1(
             "employee": "Employee",
         }
         asgardeo_role = role_mapping.get(invitation.role, "Employee")
-        await asgardeo_service.assign_role(asgardeo_id, asgardeo_role)
-        logger.info(f"Assigned role {asgardeo_role} to user {asgardeo_id}")
+        assigned = await asgardeo_service.assign_role(asgardeo_id, asgardeo_role)
+        if assigned:
+            logger.info(f"Assigned role {asgardeo_role} to user {asgardeo_id}")
+        else:
+            logger.warning(f"Role assignment skipped or failed for {asgardeo_role} on user {asgardeo_id}")
     except Exception as e:
         logger.warning(f"Failed to assign role in Asgardeo (non-blocking): {e}")
 
