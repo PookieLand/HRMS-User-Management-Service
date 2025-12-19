@@ -492,3 +492,4 @@ async def invalidate_all_cache():
     await cache.delete(CacheKeys.ONBOARDING_STATS)
 
     return {"message": "Cache invalidated successfully"}
+
