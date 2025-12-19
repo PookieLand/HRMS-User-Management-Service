@@ -51,6 +51,7 @@ class InitiateOnboardingRequest(BaseModel):
     manager_id: Optional[int] = None
     joining_date: date
     notes: Optional[str] = Field(default=None, max_length=500)
+    frontend_origin: Optional[str] = Field(default=None, max_length=255)
 
 
 class SignupStep1Request(BaseModel):

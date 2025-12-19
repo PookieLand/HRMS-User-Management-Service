@@ -45,6 +45,10 @@ class Settings(BaseSettings):
     ASGARDEO_CLIENT_ID: str = "O1swhn0zfcjJGAfxIKIfuAyoApAa"
     ASGARDEO_CLIENT_SECRET: str = "5MurGc7axd60Gg5Y0QrnrlLmlsu5yvbJhqtbl0aN_W8a"
 
+    # Optional precomputed Basic auth header (base64 of client_id:client_secret)
+    # If set, this value will be used by helpers that expect a Basic auth header.
+    AUTH_HEADER: str | None = None
+
     # Asgardeo Group IDs (Optional fallback when group read permissions are not available)
     # These are used when M2M app doesn't have permission to list/read groups
     # Find group IDs in Asgardeo Console under User Management > Groups

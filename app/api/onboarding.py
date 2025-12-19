@@ -20,6 +20,7 @@ from typing import Annotated, Optional
 
 from dateutil.relativedelta import relativedelta
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from loguru import logger as loguru_logger
 from sqlmodel import Session, select
 
 from app.api.dependencies import SessionDep, TokenData, get_current_active_user
@@ -309,10 +310,12 @@ async def initiate_onboarding(
     logger.info(f"Created onboarding invitation: {invitation.id} for {request.email}")
 
     # Build invitation link
-    # Use FRONTEND_URL from settings or default to localhost
+    # Use frontend_origin from request, fallback to FRONTEND_URL setting, then to localhost
     from app.core.config import settings
 
-    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
+    frontend_url = request.frontend_origin or getattr(
+        settings, "FRONTEND_URL", "http://localhost:3000"
+    )
     invitation_link = f"{frontend_url}/employee-signup?token={invitation_token}"
 
     # Publish onboarding initiated event
@@ -515,6 +518,7 @@ async def signup_step1(
 
     # Create user in Asgardeo
     try:
+        loguru_logger.info(f"Creating Asgardeo user for: {invitation.email}")
         asgardeo_data = await asgardeo_service.create_user(
             email=invitation.email,
             password=request.password,
@@ -523,9 +527,11 @@ async def signup_step1(
             phone=request.phone,
         )
         asgardeo_id = asgardeo_data["asgardeo_id"]
-        logger.info(f"Created Asgardeo user: {asgardeo_id}")
+        loguru_logger.info(
+            f"Created Asgardeo user: id={asgardeo_id}, username={asgardeo_data.get('username')}, email={asgardeo_data.get('email')}"
+        )
     except Exception as e:
-        logger.error(f"Failed to create Asgardeo user: {e}")
+        loguru_logger.exception(f"Failed to create Asgardeo user: {e}")
 
         # Publish failure event
         try:
@@ -538,8 +544,8 @@ async def signup_step1(
             )
             event = create_event(EventType.ONBOARDING_FAILED, failure_event)
             await publish_event(KafkaTopics.ONBOARDING_FAILED, event)
-        except Exception:
-            pass
+        except Exception as exc:
+            loguru_logger.warning(f"Failed to publish onboarding failed event: {exc}")
 
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -557,13 +563,36 @@ async def signup_step1(
             "employee": "Employee",
         }
         asgardeo_role = role_mapping.get(invitation.role, "Employee")
-        assigned = await asgardeo_service.assign_role(asgardeo_id, asgardeo_role)
-        if assigned:
-            logger.info(f"Assigned role {asgardeo_role} to user {asgardeo_id}")
+
+        loguru_logger.info(f"Resolving group for role '{asgardeo_role}'")
+        group_id = await asgardeo_service.get_group_id_for_role(asgardeo_role)
+        if group_id:
+            loguru_logger.info(
+                f"Resolved group id for role '{asgardeo_role}': {group_id}"
+            )
         else:
-            logger.warning(f"Role assignment skipped or failed for {asgardeo_role} on user {asgardeo_id}")
+            env_var_name = f"ASGARDEO_GROUP_ID_{asgardeo_role.upper()}"
+            env_val = getattr(settings, env_var_name, None)
+            loguru_logger.warning(
+                f"Group id not resolvable via API; env fallback {env_var_name} = {env_val}"
+            )
+
+        loguru_logger.info(
+            f"Assigning role '{asgardeo_role}' to user {asgardeo_id} (email={invitation.email})"
+        )
+        assigned = await asgardeo_service.assign_role(
+            asgardeo_id, asgardeo_role, display_name=invitation.email
+        )
+        if assigned:
+            loguru_logger.info(f"Assigned role {asgardeo_role} to user {asgardeo_id}")
+        else:
+            loguru_logger.warning(
+                f"Role assignment skipped or failed for {asgardeo_role} on user {asgardeo_id}"
+            )
     except Exception as e:
-        logger.warning(f"Failed to assign role in Asgardeo (non-blocking): {e}")
+        loguru_logger.exception(
+            f"Failed to assign role in Asgardeo (non-blocking): {e}"
+        )
 
     # Create local user record
     try:
@@ -1135,7 +1164,11 @@ async def resend_invitation(
     session.commit()
 
     # Build invitation link
-    invitation_link = f"http://localhost:3000/signup?token={invitation_token}"
+    # Use FRONTEND_URL from settings or default to localhost
+    from app.core.config import settings
+
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:3000")
+    invitation_link = f"{frontend_url}/employee-signup?token={invitation_token}"
 
     # Publish invitation event
     try:

@@ -92,9 +92,13 @@ class AsgardeoService:
                 if group and group.get("id"):
                     self.client.cache_group(group)
                     found[role_name] = group.get("id")
-                    logger.info(f"Preloaded group '{group_name}' for role {role_name}: {found[role_name][:8]}...")
+                    logger.info(
+                        f"Preloaded group '{group_name}' for role {role_name}: {found[role_name][:8]}..."
+                    )
                 else:
-                    logger.warning(f"Group '{group_name}' not found in Asgardeo for role {role_name}")
+                    logger.warning(
+                        f"Group '{group_name}' not found in Asgardeo for role {role_name}"
+                    )
             except httpx.HTTPStatusError as e:
                 if e.response.status_code == 403:
                     logger.warning(
@@ -104,7 +108,9 @@ class AsgardeoService:
                         "Set environment fallback variables ASGARDEO_GROUP_ID_<ROLE> or grant 'View Groups' permission to M2M app."
                     )
                 else:
-                    logger.error(f"Failed to preload group '{group_name}': HTTP {e.response.status_code}")
+                    logger.error(
+                        f"Failed to preload group '{group_name}': HTTP {e.response.status_code}"
+                    )
 
         return found
 
@@ -141,7 +147,9 @@ class AsgardeoService:
                 return None
             raise
 
-        logger.warning(f"Could not determine group ID for '{group_name}' (role {role_name})")
+        logger.warning(
+            f"Could not determine group ID for '{group_name}' (role {role_name})"
+        )
         return None
 
     async def create_user(
@@ -343,56 +351,91 @@ class AsgardeoService:
             logger.error(f"Failed to enable user in Asgardeo ({asgardeo_id}): {e}")
             raise
 
-    async def assign_role(self, asgardeo_id: str, role_name: str) -> bool:
+    async def assign_role(
+        self, asgardeo_id: str, role_name: str, display_name: str | None = None
+    ) -> bool:
         """
-        Assign role to user via group membership using cached group IDs when available.
+        Assign role to user via group membership.
+
+        Simplified implementation:
+        - Resolve group id (from cache, env fallback, or API lookup)
+        - Obtain M2M access token
+        - Use the synchronous helper in `app.asgardeo.group` to perform the SCIM PATCH.
+          The helper uses `requests` directly, so it is invoked in a thread to avoid
+          blocking the event loop.
+
+        Accepts optional `display_name` which will be used as the member 'display'
+        attribute when adding the user to the group. If not provided, the user's
+        primary email will be used when available, otherwise the user id is used.
 
         Returns:
             True if assignment succeeded, False if skipped or failed (non-blocking).
         """
-        try:
-            group_name = settings.ASGARDEO_GROUP_MAPPING.get(role_name)
-            if not group_name:
-                logger.warning(f"No group mapping found for role: {role_name}")
-                return False
+        # Resolve mapped group name
+        group_name = settings.ASGARDEO_GROUP_MAPPING.get(role_name)
+        if not group_name:
+            logger.warning(f"No group mapping found for role: {role_name}")
+            return False
 
-            # Try to determine group id (cache, env fallback, or API lookup)
-            group_id = await self.get_group_id_for_role(role_name)
-            if not group_id:
-                logger.warning(
-                    f"Could not determine group ID for role '{role_name}' (group: {group_name}). Role assignment skipped."
-                )
-                return False
+        # Try to determine group id (cache, env fallback, or API lookup)
+        group_id = await self.get_group_id_for_role(role_name)
+        if not group_id:
+            logger.warning(
+                f"Could not determine group ID for role '{role_name}' (group: {group_name}). Role assignment skipped."
+            )
+            return False
 
-            # Add user to group - get user email for display name if available
+        # Determine the display value to use for the member object.
+        # Prefer explicit argument, then try to fetch the user's primary email,
+        # and finally fall back to the user id string.
+        member_display = display_name
+        if not member_display:
             try:
                 user_data = await self.client.get_user(asgardeo_id)
-                emails = user_data.get("emails", [])
-                user_email = emails[0].get("value") if emails else None
-            except Exception:
-                user_email = None
+                emails = user_data.get("emails", []) if user_data else []
+                member_display = emails[0].get("value") if emails else None
+            except Exception as e:
+                logger.debug(f"Unable to fetch user email for {asgardeo_id}: {e}")
 
-            await self.client.add_user_to_group(
-                group_id, asgardeo_id, display_name=user_email
+        if not member_display:
+            member_display = str(asgardeo_id)
+
+        # Get an access token for PATCHing the group
+        try:
+            access_token = await self.client.get_access_token()
+        except Exception as e:
+            logger.error(f"Failed to obtain M2M access token for group assignment: {e}")
+            return False
+
+        # Perform the (blocking) requests-based group assignment in a thread
+        try:
+            import asyncio
+
+            from app.asgardeo.group import assign_user_to_group
+
+            logger.info(
+                f"Assigning user {asgardeo_id} (display={member_display}) to group {group_id} ({group_name})"
             )
+
+            await asyncio.to_thread(
+                assign_user_to_group,
+                access_token,
+                asgardeo_id,
+                group_id,
+                member_display,
+            )
+
             logger.info(
                 f"Assigned role '{role_name}' (group: {group_name}) to user {asgardeo_id}"
             )
             return True
-
-        except httpx.HTTPStatusError as e:
-            logger.error(
-                f"Failed to assign role '{role_name}' to user {asgardeo_id}: HTTP {e.response.status_code} - {e.response.text}"
-            )
-            logger.warning(
-                f"Role assignment failed (non-blocking). User created but not assigned to group."
-            )
-            return False
         except Exception as e:
             logger.error(
                 f"Failed to assign role '{role_name}' to user {asgardeo_id}: {e}"
             )
-            logger.warning(f"Failed to assign role in Asgardeo (non-blocking): {e}")
+            logger.warning(
+                "Role assignment failed (non-blocking). User created but not assigned to group."
+            )
             return False
 
     async def remove_role(self, asgardeo_id: str, role_name: str) -> None:
